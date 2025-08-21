@@ -8,7 +8,11 @@ import urllib.parse
 app = Flask(__name__)
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///lms.db')
+database_url = os.environ.get('DATABASE_URL')
+if database_url:
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url.replace('postgres://', 'postgresql://')
+else:
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///lms.db'
 print(f"DATABASE_URL from environment: {os.environ.get('DATABASE_URL')}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
