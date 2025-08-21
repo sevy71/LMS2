@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Send Picks - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">Send Pick Links</h1>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Round {{ round.round_number }} - Active Players</h5>
+            </div>
+            <div class="card-body">
+                {% if players %}
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>WhatsApp Number</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for player in players %}
+                                    <tr>
+                                        <td>{{ player.name }}</td>
+                                        <td>{{ player.whatsapp_number }}</td>
+                                        <td>
+                                            <a href="{{ player.whatsapp_link }}" class="btn btn-sm btn-success" target="_blank">
+                                                Send via WhatsApp
+                                            </a>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="text-muted">No active players in this round.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

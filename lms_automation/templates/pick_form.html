@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block title %}Make Your Pick - {{ player.name }} - Round {{ round.round_number }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">Make Your Pick - Round {{ round.round_number }}</h4>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <strong>Welcome, {{ player.name }}!</strong><br>
+                    Select the team you think will WIN their match this round. Remember: you can only pick each team once throughout the competition.
+                </div>
+
+                {% if error %}
+                    <div class="alert alert-danger">
+                        {{ error }}
+                    </div>
+                {% endif %}
+
+                <form method="POST">
+                    <div class="mb-4">
+                        <h5>Premier League Fixtures - Matchday {{ round.pl_matchday }}</h5>
+                        <div class="row">
+                            {% for fixture in fixtures %}
+                                <div class="col-md-6 mb-3">
+                                    <div class="card h-100">
+                                        <div class="card-body p-3">
+                                            <div class="fixture-info mb-2">
+                                                {% if fixture.date %}
+                                                    <small class="text-muted">{{ fixture.date.strftime('%a %d %b') }}</small>
+                                                {% endif %}
+                                                {% if fixture.time %}
+                                                    <small class="text-muted">{{ fixture.time.strftime('%H:%M') }}</small>
+                                                {% endif %}
+                                            </div>
+                                            
+                                            <div class="teams">
+                                                <!-- Home Team -->
+                                                <div class="form-check mb-2">
+                                                    <input class="form-check-input" type="radio" name="team_picked" 
+                                                           value="{{ fixture.home_team }}" 
+                                                           id="home_{{ fixture.id }}"
+                                                           {% if fixture.home_team in used_teams %}disabled{% endif %}>
+                                                    <label class="form-check-label {% if fixture.home_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
+                                                           for="home_{{ fixture.id }}">
+                                                        <strong>{{ fixture.home_team }}</strong> (Home)
+                                                        {% if fixture.home_team in used_teams %}
+                                                            <small class="text-danger">(Already Used)</small>
+                                                        {% endif %}
+                                                    </label>
+                                                </div>
+                                                
+                                                <div class="text-center my-1">
+                                                    <small class="text-muted">vs</small>
+                                                </div>
+                                                
+                                                <!-- Away Team -->
+                                                <div class="form-check">
+                                                    <input class="form-check-input" type="radio" name="team_picked" 
+                                                           value="{{ fixture.away_team }}" 
+                                                           id="away_{{ fixture.id }}"
+                                                           {% if fixture.away_team in used_teams %}disabled{% endif %}>
+                                                    <label class="form-check-label {% if fixture.away_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
+                                                           for="away_{{ fixture.id }}">
+                                                        <strong>{{ fixture.away_team }}</strong> (Away)
+                                                        {% if fixture.away_team in used_teams %}
+                                                            <small class="text-danger">(Already Used)</small>
+                                                        {% endif %}
+                                                    </label>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    {% if used_teams %}
+                        <div class="alert alert-warning">
+                            <strong>Teams you've already used:</strong><br>
+                            {% for team in used_teams %}
+                                <span class="badge bg-secondary me-1">{{ team }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+
+                    <div class="text-center">
+                        <button type="submit" class="btn btn-primary btn-lg">Submit My Pick</button>
+                    </div>
+                </form>
+            </div>
+            <div class="card-footer text-muted text-center">
+                <small>Make sure to submit your pick before the deadline!</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Highlight selected team
+document.querySelectorAll('input[name="team_picked"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+        // Remove previous selection highlighting
+        document.querySelectorAll('.card-body').forEach(card => {
+            card.classList.remove('bg-light', 'border-primary');
+        });
+        
+        // Highlight selected team's fixture
+        if (this.checked) {
+            this.closest('.card-body').classList.add('bg-light', 'border-primary');
+        }
+    });
+});
+</script>
+{% endblock %}

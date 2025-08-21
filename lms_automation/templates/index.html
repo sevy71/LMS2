@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Welcome - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 text-center">
+        <div class="card shadow">
+            <div class="card-body py-5">
+                <h1 class="card-title display-4 mb-4">Welcome to Last Man Standing!</h1>
+                <p class="card-text lead mb-4">
+                    The ultimate football prediction competition where only one survives.
+                </p>
+                <div class="row mt-5">
+                    <div class="col-md-6 mb-3">
+                        <div class="card bg-primary text-white h-100">
+                            <div class="card-body">
+                                <h5 class="card-title">How It Works</h5>
+                                <p class="card-text">Pick one team to win. If they win you go through. If they lose or draw you're out!</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <div class="card bg-success text-white h-100">
+                            <div class="card-body">
+                                <h5 class="card-title">The Challenge</h5>
+                                <p class="card-text">You can only pick each team once throughout the competition.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4">
+                    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-lg btn-outline-primary">
+                        View Admin Dashboard
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

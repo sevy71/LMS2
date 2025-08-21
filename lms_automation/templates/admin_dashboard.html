@@ -1,0 +1,931 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">Admin Dashboard</h1>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Current Round</h5>
+            </div>
+            <div class="card-body">
+                {% if current_round %}
+                    <h6 class="card-subtitle mb-2 text-muted">Round {{ current_round.round_number }}</h6>
+                    <p class="card-text">
+                        <strong>Status:</strong> 
+                        <span class="badge {% if current_round.status == 'active' %}bg-success{% else %}bg-secondary{% endif %}">
+                            {{ current_round.status.title() }}
+                        </span>
+                    </p>
+                    {% if current_round.start_date %}
+                        <p class="card-text"><strong>Start:</strong> {{ current_round.start_date.strftime('%Y-%m-%d %H:%M') }}</p>
+                    {% endif %}
+                    {% if current_round.end_date %}
+                        <p class="card-text"><strong>End:</strong> {{ current_round.end_date.strftime('%Y-%m-%d %H:%M') }}</p>
+                    {% endif %}
+                {% else %}
+                    <p class="card-text text-muted">No active round</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Competition Stats</h5>
+            </div>
+            <div class="card-body">
+                <p class="card-text">
+                    <strong>Total Players:</strong> {{ players|length }}
+                </p>
+                <p class="card-text">
+                    <strong>Active Players:</strong> {{ players|selectattr('status', 'equalto', 'active')|list|length }}
+                </p>
+                <p class="card-text">
+                    <strong>Eliminated:</strong> {{ players|selectattr('status', 'equalto', 'eliminated')|list|length }}
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">Players</h5>
+                <div class="dropdown">
+                    <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        Add Player
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#addPlayerModal">Add Single Player</a></li>
+                        <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#bulkPlayerModal">Bulk Import Players</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="card-body">
+                {% if players %}
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>WhatsApp Number</th>
+                                    <th>Status</th>
+                                    <th>Unreachable</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for player in players %}
+                                    <tr>
+                                        <td>{{ player.id }}</td>
+                                        <td>{{ player.name }}</td>
+                                        <td>{{ player.whatsapp_number }}</td>
+                                        <td>
+                                            <span class="badge 
+                                                {% if player.status == 'active' %}bg-success
+                                                {% elif player.status == 'eliminated' %}bg-danger
+                                                {% else %}bg-warning{% endif %}">
+                                                {{ player.status.title() }}
+                                            </span>
+                                        </td>
+                                        <td>
+                                            {% if player.unreachable %}
+                                                <span class="badge bg-warning">Yes</span>
+                                            {% else %}
+                                                <span class="badge bg-success">No</span>
+                                            {% endif %}
+                                        </td>
+                                        <td>
+                                            <button class="btn btn-sm btn-outline-primary edit-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}" data-player-whatsapp="{{ player.whatsapp_number }}">Edit</button>
+                                            <button class="btn btn-sm btn-outline-danger delete-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}">Delete</button>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="text-muted">No players registered yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">Quick Actions</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3 mb-2">
+                        <button class="btn btn-success w-100" data-bs-toggle="modal" data-bs-target="#createRoundModal">Create New Round</button>
+                    </div>
+                    <div class="col-md-3 mb-2">
+                        <button class="btn btn-primary w-100">Add Fixtures</button>
+                    </div>
+                    <div class="col-md-3 mb-2">
+                        <a href="{{ url_for('send_picks') }}" class="btn btn-warning w-100">Send Pick Links</a>
+                    </div>
+                    <div class="col-md-3 mb-2">
+                        <button class="btn btn-info w-100">View Reports</button>
+                    </div>
+                </div>
+                <div class="row mt-2">
+                    <div class="col-md-3 mb-2">
+                        <button class="btn btn-danger w-100" data-bs-toggle="modal" data-bs-target="#resetGameModal">Reset Game</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Single Player Modal -->
+<div class="modal fade" id="addPlayerModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Single Player</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="addPlayerForm">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="playerName" class="form-label">Player Name</label>
+                        <input type="text" class="form-control" id="playerName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="playerWhatsapp" class="form-label">WhatsApp Number</label>
+                        <input type="tel" class="form-control" id="playerWhatsapp" placeholder="+44XXXXXXXXXX" required>
+                        <div class="form-text">Include country code (e.g., +44 for UK)</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Add Player</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Bulk Import Players Modal -->
+<div class="modal fade" id="bulkPlayerModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Bulk Import Players</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="bulkPlayerForm">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="bulkPlayerData" class="form-label">Player Data</label>
+                        <textarea class="form-control" id="bulkPlayerData" rows="10" placeholder="John Smith&#10;Jane Doe, +447987654321&#10;Mike Johnson&#10;Sarah Wilson, +447555123456" required></textarea>
+                        <div class="form-text">
+                            Enter one player per line. Format options:<br>
+                            • Name only: <strong>John Smith</strong><br>
+                            • Name with WhatsApp: <strong>Jane Doe, +447987654321</strong>
+                        </div>
+                    </div>
+                    <div class="alert alert-info">
+                        <strong>Flexible Format:</strong> You can enter just names, or names with WhatsApp numbers. If no number is provided, it can be added later.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Import Players</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Player Modal -->
+<div class="modal fade" id="editPlayerModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Player</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="editPlayerForm">
+                <input type="hidden" id="editPlayerId">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="editPlayerName" class="form-label">Player Name</label>
+                        <input type="text" class="form-control" id="editPlayerName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="editPlayerWhatsapp" class="form-label">WhatsApp Number</label>
+                        <input type="tel" class="form-control" id="editPlayerWhatsapp" placeholder="+44XXXXXXXXXX">
+                        <div class="form-text">Include country code (e.g., +44 for UK) or leave empty</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Update Player</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deletePlayerModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Confirm Delete</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="deletePlayerId">
+                <p>Are you sure you want to delete player <strong id="deletePlayerName"></strong>?</p>
+                <p class="text-danger">This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Delete Player</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create New Round Modal -->
+<div class="modal fade" id="createRoundModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create New Round</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="createRoundForm">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="roundNumber" class="form-label">Game Round Number</label>
+                        <input type="number" class="form-control" id="roundNumber" min="1" required>
+                        <div class="form-text">Enter the game round number (e.g., 1, 2, 3...)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="plMatchday" class="form-label">Premier League Matchday</label>
+                        <select class="form-control" id="plMatchday" required>
+                            <option value="">Loading matchdays...</option>
+                        </select>
+                        <div class="form-text">Select which PL matchday to use for fixtures</div>
+                        <div id="matchdayInfo" class="mt-2 text-muted"></div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="startDate" class="form-label">Start Date & Time</label>
+                        <input type="datetime-local" class="form-control" id="startDate">
+                        <div class="form-text">When players can start making picks (optional)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="endDate" class="form-label">End Date & Time</label>
+                        <input type="datetime-local" class="form-control" id="endDate">
+                        <div class="form-text">Deadline for picks (optional)</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="roundStatus" class="form-label">Initial Status</label>
+                        <select class="form-control" id="roundStatus" required>
+                            <option value="pending">Pending</option>
+                            <option value="active">Active</option>
+                        </select>
+                        <div class="form-text">Set to Active to allow picks immediately</div>
+                    </div>
+                    <div class="alert alert-info">
+                        <strong>Note:</strong> You can add fixtures to this round after creating it using the "Add Fixtures" button.
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-success">Create Round</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Reset Game Modal -->
+<div class="modal fade" id="resetGameModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Reset Game</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-danger">
+                    <strong>Warning:</strong> This will permanently delete all game data except players.
+                </div>
+                <p>This action will delete:</p>
+                <ul>
+                    <li>All rounds and fixtures</li>
+                    <li>All player picks</li>
+                    <li>All pending WhatsApp messages</li>
+                </ul>
+                <p><strong>Players will be preserved</strong> but their status will be reset to "active".</p>
+                <p class="text-danger"><strong>This action cannot be undone.</strong></p>
+                
+                <div class="mt-3">
+                    <label for="confirmResetText" class="form-label">Type "RESET GAME" to confirm:</label>
+                    <input type="text" class="form-control" id="confirmResetText" placeholder="RESET GAME">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmResetBtn" disabled>Reset Game</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Send Pick Links Modal -->
+<div class="modal fade" id="sendPickLinksModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Send Pick Links</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="roundSelect" class="form-label">Select Round</label>
+                    <select class="form-control" id="roundSelect" required>
+                        <option value="">Loading rounds...</option>
+                    </select>
+                    <div class="form-text">Pick links will be sent to all active players for this round</div>
+                </div>
+                
+                <div id="roundInfo" class="mt-3"></div>
+                
+                <div class="alert alert-info">
+                    <strong>What will happen:</strong><br>
+                    • Unique secure links will be generated for each active player<br>
+                    • Links will be queued for WhatsApp delivery<br>
+                    • Players can use their link to submit their pick<br>
+                    • Each link can only be used once and expires after 7 days
+                </div>
+                
+                <div id="playersPreview" class="mt-3"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-warning" id="confirmSendLinksBtn" disabled>Send Pick Links</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Handle single player form submission
+    document.getElementById('addPlayerForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const name = document.getElementById('playerName').value.trim();
+        const whatsapp = document.getElementById('playerWhatsapp').value.trim();
+        
+        if (!name || !whatsapp) {
+            alert('Please fill in all fields');
+            return;
+        }
+        
+        fetch('/api/players', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                name: name,
+                whatsapp_number: whatsapp
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert('Error adding player: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error adding player: ' + error);
+        });
+    });
+    
+    // Handle bulk player form submission
+    document.getElementById('bulkPlayerForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const bulkData = document.getElementById('bulkPlayerData').value.trim();
+        
+        if (!bulkData) {
+            alert('Please enter player data');
+            return;
+        }
+        
+        const players = [];
+        const lines = bulkData.split('\n');
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            
+            const parts = line.split(',');
+            let name, whatsapp = null;
+            
+            if (parts.length === 1) {
+                // Name only
+                name = parts[0].trim();
+            } else if (parts.length === 2) {
+                // Name and WhatsApp number
+                name = parts[0].trim();
+                whatsapp = parts[1].trim();
+            } else {
+                alert(`Invalid format on line ${i + 1}. Use: Name or Name, WhatsApp Number`);
+                return;
+            }
+            
+            if (!name) {
+                alert(`Missing name on line ${i + 1}`);
+                return;
+            }
+            
+            const playerData = {
+                name: name,
+                whatsapp_number: whatsapp || '' // Empty string if no number provided
+            };
+            
+            players.push(playerData);
+        }
+        
+        if (players.length === 0) {
+            alert('No valid players found');
+            return;
+        }
+        
+        fetch('/api/players/bulk', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                players: players
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Successfully imported ${data.count} players`);
+                location.reload();
+            } else {
+                alert('Error importing players: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error importing players: ' + error);
+        });
+    });
+    
+    // Handle edit player buttons
+    document.querySelectorAll('.edit-player-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            const playerWhatsapp = this.getAttribute('data-player-whatsapp');
+            
+            document.getElementById('editPlayerId').value = playerId;
+            document.getElementById('editPlayerName').value = playerName;
+            document.getElementById('editPlayerWhatsapp').value = playerWhatsapp || '';
+            
+            new bootstrap.Modal(document.getElementById('editPlayerModal')).show();
+        });
+    });
+    
+    // Handle edit player form submission
+    document.getElementById('editPlayerForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const playerId = document.getElementById('editPlayerId').value;
+        const name = document.getElementById('editPlayerName').value.trim();
+        const whatsapp = document.getElementById('editPlayerWhatsapp').value.trim();
+        
+        if (!name) {
+            alert('Player name is required');
+            return;
+        }
+        
+        fetch(`/api/players/${playerId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                name: name,
+                whatsapp_number: whatsapp
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert('Error updating player: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error updating player: ' + error);
+        });
+    });
+    
+    // Handle delete player buttons
+    document.querySelectorAll('.delete-player-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            
+            document.getElementById('deletePlayerId').value = playerId;
+            document.getElementById('deletePlayerName').textContent = playerName;
+            
+            new bootstrap.Modal(document.getElementById('deletePlayerModal')).show();
+        });
+    });
+    
+    // Handle delete confirmation
+    document.getElementById('confirmDeleteBtn').addEventListener('click', function() {
+        const playerId = document.getElementById('deletePlayerId').value;
+        
+        fetch(`/api/players/${playerId}`, {
+            method: 'DELETE'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                location.reload();
+            } else {
+                alert('Error deleting player: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error deleting player: ' + error);
+        });
+    });
+    
+    // Auto-populate next round number and load matchdays when modal opens
+    document.getElementById('createRoundModal').addEventListener('show.bs.modal', function() {
+        // Populate next round number
+        fetch('/api/rounds')
+            .then(response => response.json())
+            .then(data => {
+                let maxRound = 0;
+                data.forEach(round => {
+                    if (round.round_number > maxRound) {
+                        maxRound = round.round_number;
+                    }
+                });
+                document.getElementById('roundNumber').value = maxRound + 1;
+            })
+            .catch(error => {
+                console.error('Error fetching rounds:', error);
+                document.getElementById('roundNumber').value = 1;
+            });
+        
+        // Load available matchdays
+        const matchdaySelect = document.getElementById('plMatchday');
+        matchdaySelect.innerHTML = '<option value="">Loading matchdays...</option>';
+        
+        fetch('/api/matchdays')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    matchdaySelect.innerHTML = '<option value="">Select a matchday...</option>';
+                    data.matchdays.forEach(matchday => {
+                        const option = document.createElement('option');
+                        option.value = matchday.matchday;
+                        option.textContent = `Matchday ${matchday.matchday} (${matchday.fixture_count} fixtures)`;
+                        matchdaySelect.appendChild(option);
+                    });
+                } else {
+                    matchdaySelect.innerHTML = '<option value="">Error loading matchdays</option>';
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching matchdays:', error);
+                matchdaySelect.innerHTML = '<option value="">Error loading matchdays</option>';
+            });
+    });
+    
+    // Handle matchday selection change
+    document.getElementById('plMatchday').addEventListener('change', function() {
+        const matchday = this.value;
+        const infoDiv = document.getElementById('matchdayInfo');
+        
+        if (!matchday) {
+            infoDiv.innerHTML = '';
+            return;
+        }
+        
+        infoDiv.innerHTML = 'Loading matchday info...';
+        
+        fetch(`/api/matchdays/${matchday}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.info) {
+                    const info = data.info;
+                    let infoText = `${info.fixture_count} fixtures`;
+                    if (info.earliest_date && info.latest_date) {
+                        const startDate = new Date(info.earliest_date).toLocaleDateString();
+                        const endDate = new Date(info.latest_date).toLocaleDateString();
+                        if (startDate === endDate) {
+                            infoText += ` on ${startDate}`;
+                        } else {
+                            infoText += ` from ${startDate} to ${endDate}`;
+                        }
+                    }
+                    infoDiv.innerHTML = infoText;
+                } else {
+                    infoDiv.innerHTML = 'Could not load matchday info';
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching matchday info:', error);
+                infoDiv.innerHTML = 'Error loading matchday info';
+            });
+    });
+    
+    // Handle create round form submission
+    document.getElementById('createRoundForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const roundNumber = document.getElementById('roundNumber').value;
+        const plMatchday = document.getElementById('plMatchday').value;
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+        const status = document.getElementById('roundStatus').value;
+        
+        if (!roundNumber) {
+            alert('Round number is required');
+            return;
+        }
+        
+        if (!plMatchday) {
+            alert('Premier League matchday is required');
+            return;
+        }
+        
+        // Validate dates if both are provided
+        if (startDate && endDate && new Date(startDate) >= new Date(endDate)) {
+            alert('End date must be after start date');
+            return;
+        }
+        
+        const roundData = {
+            round_number: parseInt(roundNumber),
+            pl_matchday: parseInt(plMatchday),
+            status: status
+        };
+        
+        if (startDate) {
+            roundData.start_date = startDate;
+        }
+        
+        if (endDate) {
+            roundData.end_date = endDate;
+        }
+        
+        fetch('/api/rounds', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(roundData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                let message = `Round ${data.round_number} created successfully!`;
+                if (data.fixtures_added > 0) {
+                    message += ` ${data.fixtures_added} Premier League fixtures added.`;
+                }
+                if (data.warning) {
+                    message += `\n\nWarning: ${data.warning}`;
+                }
+                alert(message);
+                location.reload();
+            } else {
+                alert('Error creating round: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error creating round: ' + error);
+        });
+    });
+    
+    // Handle reset game confirmation input
+    document.getElementById('confirmResetText').addEventListener('input', function() {
+        const confirmBtn = document.getElementById('confirmResetBtn');
+        const inputValue = this.value.trim();
+        
+        if (inputValue === 'RESET GAME') {
+            confirmBtn.disabled = false;
+        } else {
+            confirmBtn.disabled = true;
+        }
+    });
+    
+    // Handle reset game confirmation
+    document.getElementById('confirmResetBtn').addEventListener('click', function() {
+        const confirmText = document.getElementById('confirmResetText').value.trim();
+        
+        if (confirmText !== 'RESET GAME') {
+            alert('Please type "RESET GAME" to confirm');
+            return;
+        }
+        
+        if (!confirm('Are you absolutely sure you want to reset the game? This cannot be undone.')) {
+            return;
+        }
+        
+        fetch('/api/reset-game', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Game reset successfully!\n\nDeleted:\n- ${data.rounds_deleted} rounds\n- ${data.fixtures_deleted} fixtures\n- ${data.picks_deleted} picks\n- ${data.messages_deleted} messages\n\nPlayers preserved: ${data.players_reset}`);
+                location.reload();
+            } else {
+                alert('Error resetting game: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error resetting game: ' + error);
+        });
+    });
+    
+    // Reset confirmation text when modal is hidden
+    document.getElementById('resetGameModal').addEventListener('hidden.bs.modal', function() {
+        document.getElementById('confirmResetText').value = '';
+        document.getElementById('confirmResetBtn').disabled = true;
+    });
+    
+    // Load rounds when Send Pick Links modal opens
+    document.getElementById('sendPickLinksModal').addEventListener('show.bs.modal', function() {
+        const roundSelect = document.getElementById('roundSelect');
+        roundSelect.innerHTML = '<option value="">Loading rounds...</option>';
+        document.getElementById('confirmSendLinksBtn').disabled = true;
+        
+        fetch('/api/rounds')
+            .then(response => response.json())
+            .then(data => {
+                roundSelect.innerHTML = '<option value="">Select a round...</option>';
+                data.forEach(round => {
+                    const option = document.createElement('option');
+                    option.value = round.id;
+                    option.textContent = `Round ${round.round_number} (${round.status})`;
+                    roundSelect.appendChild(option);
+                });
+            })
+            .catch(error => {
+                console.error('Error loading rounds:', error);
+                roundSelect.innerHTML = '<option value="">Error loading rounds</option>';
+            });
+    });
+    
+    // Handle round selection change
+    document.getElementById('roundSelect').addEventListener('change', function() {
+        const roundId = this.value;
+        const confirmBtn = document.getElementById('confirmSendLinksBtn');
+        const roundInfo = document.getElementById('roundInfo');
+        const playersPreview = document.getElementById('playersPreview');
+        
+        if (!roundId) {
+            confirmBtn.disabled = true;
+            roundInfo.innerHTML = '';
+            playersPreview.innerHTML = '';
+            return;
+        }
+        
+        roundInfo.innerHTML = 'Loading round information...';
+        playersPreview.innerHTML = '';
+        
+        // Get round info and active players
+        Promise.all([
+            fetch(`/api/rounds/${roundId}`),
+            fetch('/api/players')
+        ])
+        .then(responses => Promise.all(responses.map(r => r.json())))
+        .then(([roundData, playersData]) => {
+            if (roundData.success && playersData) {
+                const round = roundData.round;
+                const activePlayers = playersData.filter(p => p.status === 'active');
+                
+                roundInfo.innerHTML = `
+                    <div class="alert alert-secondary">
+                        <strong>Round ${round.round_number}</strong> - Premier League Matchday ${round.pl_matchday}<br>
+                        Status: <span class="badge bg-${round.status === 'active' ? 'success' : 'secondary'}">${round.status}</span><br>
+                        Fixtures: ${round.fixture_count} matches
+                    </div>
+                `;
+                
+                if (activePlayers.length > 0) {
+                    playersPreview.innerHTML = `
+                        <div class="alert alert-success">
+                            <strong>${activePlayers.length} active players</strong> will receive pick links:<br>
+                            ${activePlayers.map(p => `<span class="badge bg-primary me-1">${p.name}</span>`).join('')}
+                        </div>
+                    `;
+                    confirmBtn.disabled = false;
+                } else {
+                    playersPreview.innerHTML = `
+                        <div class="alert alert-warning">
+                            <strong>No active players found.</strong> Make sure there are active players before sending pick links.
+                        </div>
+                    `;
+                    confirmBtn.disabled = true;
+                }
+            } else {
+                roundInfo.innerHTML = '<div class="alert alert-danger">Error loading round information</div>';
+                confirmBtn.disabled = true;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading round/players info:', error);
+            roundInfo.innerHTML = '<div class="alert alert-danger">Error loading information</div>';
+            confirmBtn.disabled = true;
+        });
+    });
+    
+    // Handle send pick links confirmation
+    document.getElementById('confirmSendLinksBtn').addEventListener('click', function() {
+        const roundId = document.getElementById('roundSelect').value;
+        
+        if (!roundId) {
+            alert('Please select a round');
+            return;
+        }
+        
+        if (!confirm('Are you sure you want to send pick links for this round? This will generate new secure links for all active players.')) {
+            return;
+        }
+        
+        this.disabled = true;
+        this.textContent = 'Sending...';
+        
+        fetch('/api/send-pick-links', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                round_id: parseInt(roundId)
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Pick links sent successfully!\n\n• Generated ${data.tokens_created} pick tokens\n• Queued ${data.messages_queued} WhatsApp messages\n\nThe sender worker will process these messages automatically.`);
+                document.getElementById('sendPickLinksModal').querySelector('[data-bs-dismiss="modal"]').click();
+            } else {
+                alert('Error sending pick links: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error sending pick links: ' + error);
+        })
+        .finally(() => {
+            this.disabled = false;
+            this.textContent = 'Send Pick Links';
+        });
+    });
+    
+    // Reset modal when hidden
+    document.getElementById('sendPickLinksModal').addEventListener('hidden.bs.modal', function() {
+        document.getElementById('roundSelect').value = '';
+        document.getElementById('roundInfo').innerHTML = '';
+        document.getElementById('playersPreview').innerHTML = '';
+        document.getElementById('confirmSendLinksBtn').disabled = true;
+    });
+});
+</script>
+{% endblock %}

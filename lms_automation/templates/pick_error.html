@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Pick Link Error - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card shadow">
+            <div class="card-header bg-danger text-white text-center">
+                <h4 class="mb-0">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    Pick Link Error
+                </h4>
+            </div>
+            <div class="card-body text-center py-5">
+                <div class="alert alert-danger">
+                    <h6 class="mb-2">Sorry, there's an issue with your pick link:</h6>
+                    <p class="mb-0"><strong>{{ error }}</strong></p>
+                </div>
+
+                <div class="mt-4">
+                    <h6>What can you do?</h6>
+                    <ul class="list-unstyled text-start">
+                        <li><i class="fas fa-refresh text-primary me-2"></i> Check if you have a newer pick link in your messages</li>
+                        <li><i class="fas fa-phone text-success me-2"></i> Contact the game administrator for a new link</li>
+                        <li><i class="fas fa-clock text-warning me-2"></i> Make sure you're using the link before the deadline</li>
+                        <li><i class="fas fa-check text-info me-2"></i> Verify you haven't already submitted a pick for this round</li>
+                    </ul>
+                </div>
+
+                <div class="mt-4">
+                    <small class="text-muted">
+                        Pick links are unique and can only be used once. They also have expiration dates 
+                        to ensure fair play in the competition.
+                    </small>
+                </div>
+            </div>
+            <div class="card-footer text-center">
+                <small class="text-muted">
+                    Last Man Standing Competition - Secure Pick System
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
