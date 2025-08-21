@@ -5,8 +5,6 @@ from dotenv import load_dotenv
 from datetime import datetime
 import urllib.parse
 
-load_dotenv('.env.local')
-
 app = Flask(__name__)
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
