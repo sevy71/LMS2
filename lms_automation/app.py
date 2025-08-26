@@ -65,27 +65,30 @@ def send_picks():
         # Debug logging
         print(f"Generated pick URL for {player.name}: {pick_url}")
         
-        message = f"""🏆 Last Man Standing - Round {current_round.round_number}
-
-Hi {player.name}! 
-
-It's time to make your pick for Round {current_round.round_number} (Premier League Matchday {current_round.pl_matchday}).
-
-⚠️ Remember:
-• Pick a team you think will WIN
-• You can only use each team ONCE
-• If your team loses or draws, you're out!
-• This link expires in 7 days and can only be used once
-
-Good luck! 🍀
-
-Click your unique link to submit your pick:
-{pick_url}"""
+        # Format message with better mobile WhatsApp compatibility
+        message_lines = [
+            f"🏆 Last Man Standing - Round {current_round.round_number}",
+            "",
+            f"Hi {player.name}!",
+            "",
+            f"Time to make your pick for Round {current_round.round_number} (PL Matchday {current_round.pl_matchday}).",
+            "",
+            "⚠️ Remember:",
+            "• Pick a team you think will WIN",
+            "• You can only use each team ONCE", 
+            "• If your team loses or draws, you're out!",
+            "• Link expires in 7 days",
+            "",
+            "Good luck! 🍀",
+            "",
+            "Your pick link:",
+            pick_url
+        ]
         
-        # Use quote_plus for better WhatsApp compatibility but preserve URL structure
-        encoded_message = urllib.parse.quote_plus(message)
-        # Fix the URL encoding so it remains clickable
-        encoded_message = encoded_message.replace('%3A', ':').replace('%2F', '/').replace('%3F', '?').replace('%3D', '=').replace('%26', '&')
+        message = "\n".join(message_lines)
+        
+        # Encode for WhatsApp with minimal encoding to preserve URL clickability
+        encoded_message = urllib.parse.quote(message, safe=':/?#[]@!$&\'()*+,;=.-_~')
         
         player.whatsapp_link = f"https://web.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={encoded_message}"
         
@@ -319,18 +322,57 @@ def handle_rounds():
                 fixtures_data = api.get_premier_league_fixtures(pl_matchday)
                 formatted_fixtures = api.format_fixtures_for_db(fixtures_data, pl_matchday)
                 
-                # Create fixture records
-                for fixture_data in formatted_fixtures:
+                if formatted_fixtures:
+                    # Create fixture records from API data
+                    for fixture_data in formatted_fixtures:
+                        fixture = Fixture(
+                            round_id=new_round.id,
+                            event_id=fixture_data['event_id'],
+                            home_team=fixture_data['home_team'],
+                            away_team=fixture_data['away_team'],
+                            date=fixture_data['date'],
+                            time=fixture_data['time'],
+                            home_score=fixture_data['home_score'],
+                            away_score=fixture_data['away_score'],
+                            status=fixture_data['status']
+                        )
+                        db.session.add(fixture)
+                    
+                    db.session.commit()
+                    
+                    return jsonify({
+                        'success': True, 
+                        'id': new_round.id, 
+                        'round_number': new_round.round_number,
+                        'pl_matchday': new_round.pl_matchday,
+                        'fixtures_added': len(formatted_fixtures)
+                    })
+                else:
+                    # No fixtures from API, create fallback fixtures
+                    raise Exception("No fixtures returned from API")
+                
+            except Exception as fixture_error:
+                print(f"API failed, creating fallback fixtures: {fixture_error}")
+                # Create fallback Premier League fixtures for the round
+                fallback_fixtures = [
+                    ("Arsenal", "Chelsea"), ("Liverpool", "Manchester City"), 
+                    ("Manchester United", "Tottenham"), ("Newcastle", "Brighton"),
+                    ("Aston Villa", "West Ham"), ("Crystal Palace", "Everton"),
+                    ("Fulham", "Brentford"), ("Wolves", "Nottingham Forest"),
+                    ("Bournemouth", "Sheffield United"), ("Burnley", "Luton Town")
+                ]
+                
+                for i, (home_team, away_team) in enumerate(fallback_fixtures):
                     fixture = Fixture(
                         round_id=new_round.id,
-                        event_id=fixture_data['event_id'],
-                        home_team=fixture_data['home_team'],
-                        away_team=fixture_data['away_team'],
-                        date=fixture_data['date'],
-                        time=fixture_data['time'],
-                        home_score=fixture_data['home_score'],
-                        away_score=fixture_data['away_score'],
-                        status=fixture_data['status']
+                        event_id=f"fallback_{new_round.id}_{i}",
+                        home_team=home_team,
+                        away_team=away_team,
+                        date=None,
+                        time=None,
+                        home_score=None,
+                        away_score=None,
+                        status='scheduled'
                     )
                     db.session.add(fixture)
                 
@@ -341,19 +383,8 @@ def handle_rounds():
                     'id': new_round.id, 
                     'round_number': new_round.round_number,
                     'pl_matchday': new_round.pl_matchday,
-                    'fixtures_added': len(formatted_fixtures)
-                })
-                
-            except Exception as fixture_error:
-                # If fixture fetching fails, still create the round but without fixtures
-                db.session.commit()
-                return jsonify({
-                    'success': True, 
-                    'id': new_round.id, 
-                    'round_number': new_round.round_number,
-                    'pl_matchday': new_round.pl_matchday,
-                    'fixtures_added': 0,
-                    'warning': f'Round created but fixtures could not be fetched: {str(fixture_error)}'
+                    'fixtures_added': len(fallback_fixtures),
+                    'warning': f'Round created with fallback fixtures (API failed): {str(fixture_error)}'
                 })
             
         except Exception as e:
@@ -593,10 +624,25 @@ def make_pick(token):
     
     # Get fixtures for this round
     fixtures = Fixture.query.filter_by(round_id=round_obj.id).all()
+    print(f"Found {len(fixtures)} fixtures for round {round_obj.id} (round number {round_obj.round_number})")
+    
+    # If no fixtures exist, this indicates a problem with round creation
+    if not fixtures:
+        print(f"ERROR: No fixtures found for round {round_obj.id}. This round may have been created without fixtures.")
     
     # Get player's previous picks to prevent reusing teams
     previous_picks = Pick.query.filter_by(player_id=player.id).all()
     used_teams = [pick.team_picked for pick in previous_picks]
+    
+    # Debug logging for team availability
+    all_teams = []
+    for fixture in fixtures:
+        all_teams.extend([fixture.home_team, fixture.away_team])
+    available_teams = [team for team in all_teams if team not in used_teams]
+    
+    print(f"Player {player.name}: {len(used_teams)} used teams, {len(available_teams)} available teams")
+    print(f"Used teams: {used_teams}")
+    print(f"Available teams: {set(available_teams)}")
     
     if request.method == 'POST':
         team_picked = request.form.get('team_picked')

@@ -27,7 +27,7 @@
                         <div class="row">
                             {% for fixture in fixtures %}
                                 <div class="col-md-6 mb-3">
-                                    <div class="card h-100">
+                                    <div class="card h-100 {% if fixture.home_team in used_teams and fixture.away_team in used_teams %}opacity-50{% endif %}">
                                         <div class="card-body p-3">
                                             <div class="fixture-info mb-2">
                                                 {% if fixture.date %}
@@ -47,9 +47,9 @@
                                                            {% if fixture.home_team in used_teams %}disabled{% endif %}>
                                                     <label class="form-check-label {% if fixture.home_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
                                                            for="home_{{ fixture.id }}">
-                                                        <strong>{{ fixture.home_team }}</strong> (Home)
+                                                        <strong class="{% if fixture.home_team in used_teams %}text-secondary{% endif %}">{{ fixture.home_team }}</strong> (Home)
                                                         {% if fixture.home_team in used_teams %}
-                                                            <small class="text-danger">(Already Used)</small>
+                                                            <small class="text-danger fw-bold">(ALREADY USED ❌)</small>
                                                         {% endif %}
                                                     </label>
                                                 </div>
@@ -66,9 +66,9 @@
                                                            {% if fixture.away_team in used_teams %}disabled{% endif %}>
                                                     <label class="form-check-label {% if fixture.away_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
                                                            for="away_{{ fixture.id }}">
-                                                        <strong>{{ fixture.away_team }}</strong> (Away)
+                                                        <strong class="{% if fixture.away_team in used_teams %}text-secondary{% endif %}">{{ fixture.away_team }}</strong> (Away)
                                                         {% if fixture.away_team in used_teams %}
-                                                            <small class="text-danger">(Already Used)</small>
+                                                            <small class="text-danger fw-bold">(ALREADY USED ❌)</small>
                                                         {% endif %}
                                                     </label>
                                                 </div>
