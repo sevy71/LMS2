@@ -60,6 +60,10 @@ def send_picks():
             if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
                 base_url = base_url.replace('http://', 'https://')
         
+        # Ensure base_url has protocol
+        if not base_url.startswith(('http://', 'https://')):
+            base_url = f"https://{base_url}"
+        
         pick_url = pick_token.get_pick_url(base_url)
         
         # Debug logging
@@ -553,6 +557,88 @@ def get_round_by_id(round_id):
             }
         })
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/rounds/<int:round_id>/fixtures', methods=['POST'])
+def add_fixtures_to_round(round_id):
+    """Add fixtures to an existing round"""
+    try:
+        round_obj = Round.query.get_or_404(round_id)
+        
+        # Check if round already has fixtures
+        existing_fixtures = Fixture.query.filter_by(round_id=round_id).count()
+        if existing_fixtures > 0:
+            return jsonify({'success': False, 'error': f'Round already has {existing_fixtures} fixtures'}), 400
+        
+        # Try to get fixtures from API
+        try:
+            from football_api import FootballDataAPI
+            api = FootballDataAPI()
+            fixtures_data = api.get_premier_league_fixtures(round_obj.pl_matchday)
+            formatted_fixtures = api.format_fixtures_for_db(fixtures_data, round_obj.pl_matchday)
+            
+            if formatted_fixtures:
+                # Create fixture records from API data
+                for fixture_data in formatted_fixtures:
+                    fixture = Fixture(
+                        round_id=round_obj.id,
+                        event_id=fixture_data['event_id'],
+                        home_team=fixture_data['home_team'],
+                        away_team=fixture_data['away_team'],
+                        date=fixture_data['date'],
+                        time=fixture_data['time'],
+                        home_score=fixture_data['home_score'],
+                        away_score=fixture_data['away_score'],
+                        status=fixture_data['status']
+                    )
+                    db.session.add(fixture)
+                
+                db.session.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'fixtures_added': len(formatted_fixtures),
+                    'source': 'api'
+                })
+            else:
+                raise Exception("No fixtures returned from API")
+                
+        except Exception as api_error:
+            print(f"API failed, creating fallback fixtures for round {round_id}: {api_error}")
+            # Create fallback Premier League fixtures
+            fallback_fixtures = [
+                ("Arsenal", "Chelsea"), ("Liverpool", "Manchester City"), 
+                ("Manchester United", "Tottenham"), ("Newcastle", "Brighton"),
+                ("Aston Villa", "West Ham"), ("Crystal Palace", "Everton"),
+                ("Fulham", "Brentford"), ("Wolves", "Nottingham Forest"),
+                ("Bournemouth", "Sheffield United"), ("Burnley", "Luton Town")
+            ]
+            
+            for i, (home_team, away_team) in enumerate(fallback_fixtures):
+                fixture = Fixture(
+                    round_id=round_obj.id,
+                    event_id=f"fallback_{round_obj.id}_{i}",
+                    home_team=home_team,
+                    away_team=away_team,
+                    date=None,
+                    time=None,
+                    home_score=None,
+                    away_score=None,
+                    status='scheduled'
+                )
+                db.session.add(fixture)
+            
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'fixtures_added': len(fallback_fixtures),
+                'source': 'fallback',
+                'warning': f'Used fallback fixtures due to API error: {str(api_error)}'
+            })
+        
+    except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/reset-game', methods=['POST'])

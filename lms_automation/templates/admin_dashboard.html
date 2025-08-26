@@ -135,7 +135,7 @@
                         <button class="btn btn-success w-100" data-bs-toggle="modal" data-bs-target="#createRoundModal">Create New Round</button>
                     </div>
                     <div class="col-md-3 mb-2">
-                        <button class="btn btn-primary w-100">Add Fixtures</button>
+                        <button class="btn btn-primary w-100" data-bs-toggle="modal" data-bs-target="#addFixturesModal">Add Fixtures</button>
                     </div>
                     <div class="col-md-3 mb-2">
                         <a href="{{ url_for('send_picks') }}" class="btn btn-warning w-100">Send Pick Links</a>
@@ -386,6 +386,40 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-warning" id="confirmSendLinksBtn" disabled>Send Pick Links</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Fixtures Modal -->
+<div class="modal fade" id="addFixturesModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Fixtures to Round</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="fixtureRoundSelect" class="form-label">Select Round</label>
+                    <select class="form-control" id="fixtureRoundSelect" required>
+                        <option value="">Loading rounds...</option>
+                    </select>
+                    <div class="form-text">Select a round that needs fixtures added</div>
+                </div>
+                
+                <div id="fixtureRoundInfo" class="mt-3"></div>
+                
+                <div class="alert alert-info">
+                    <strong>What will happen:</strong><br>
+                    • Fixtures will be fetched from the Premier League API<br>
+                    • If API fails, fallback fixtures will be created<br>
+                    • This ensures players always have teams to pick from
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="confirmAddFixturesBtn" disabled>Add Fixtures</button>
             </div>
         </div>
     </div>
@@ -936,6 +970,128 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('roundInfo').innerHTML = '';
         document.getElementById('playersPreview').innerHTML = '';
         document.getElementById('confirmSendLinksBtn').disabled = true;
+    });
+    
+    // Load rounds when Add Fixtures modal opens
+    document.getElementById('addFixturesModal').addEventListener('show.bs.modal', function() {
+        const roundSelect = document.getElementById('fixtureRoundSelect');
+        roundSelect.innerHTML = '<option value="">Loading rounds...</option>';
+        document.getElementById('confirmAddFixturesBtn').disabled = true;
+        
+        fetch('/api/rounds')
+            .then(response => response.json())
+            .then(data => {
+                roundSelect.innerHTML = '<option value="">Select a round...</option>';
+                data.forEach(round => {
+                    const option = document.createElement('option');
+                    option.value = round.id;
+                    option.textContent = `Round ${round.round_number} (${round.status})`;
+                    roundSelect.appendChild(option);
+                });
+            })
+            .catch(error => {
+                console.error('Error loading rounds:', error);
+                roundSelect.innerHTML = '<option value="">Error loading rounds</option>';
+            });
+    });
+    
+    // Handle round selection for fixtures
+    document.getElementById('fixtureRoundSelect').addEventListener('change', function() {
+        const roundId = this.value;
+        const confirmBtn = document.getElementById('confirmAddFixturesBtn');
+        const roundInfo = document.getElementById('fixtureRoundInfo');
+        
+        if (!roundId) {
+            confirmBtn.disabled = true;
+            roundInfo.innerHTML = '';
+            return;
+        }
+        
+        roundInfo.innerHTML = 'Loading round information...';
+        
+        fetch(`/api/rounds/${roundId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const round = data.round;
+                    roundInfo.innerHTML = `
+                        <div class="alert alert-secondary">
+                            <strong>Round ${round.round_number}</strong> - Premier League Matchday ${round.pl_matchday}<br>
+                            Status: <span class="badge bg-${round.status === 'active' ? 'success' : 'secondary'}">${round.status}</span><br>
+                            Current Fixtures: ${round.fixture_count}
+                        </div>
+                    `;
+                    
+                    if (round.fixture_count > 0) {
+                        roundInfo.innerHTML += '<div class="alert alert-warning">This round already has fixtures. Adding fixtures will fail if fixtures already exist.</div>';
+                    }
+                    
+                    confirmBtn.disabled = false;
+                } else {
+                    roundInfo.innerHTML = '<div class="alert alert-danger">Error loading round information</div>';
+                    confirmBtn.disabled = true;
+                }
+            })
+            .catch(error => {
+                console.error('Error loading round info:', error);
+                roundInfo.innerHTML = '<div class="alert alert-danger">Error loading information</div>';
+                confirmBtn.disabled = true;
+            });
+    });
+    
+    // Handle add fixtures confirmation
+    document.getElementById('confirmAddFixturesBtn').addEventListener('click', function() {
+        const roundId = document.getElementById('fixtureRoundSelect').value;
+        
+        if (!roundId) {
+            alert('Please select a round');
+            return;
+        }
+        
+        if (!confirm('Are you sure you want to add fixtures to this round?')) {
+            return;
+        }
+        
+        this.disabled = true;
+        this.textContent = 'Adding Fixtures...';
+        
+        fetch(`/api/rounds/${roundId}/fixtures`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                let message = `Fixtures added successfully!\n\n• Added ${data.fixtures_added} fixtures`;
+                if (data.source === 'fallback') {
+                    message += '\n• Used fallback fixtures (API unavailable)';
+                }
+                if (data.warning) {
+                    message += `\n• Warning: ${data.warning}`;
+                }
+                alert(message);
+                document.getElementById('addFixturesModal').querySelector('[data-bs-dismiss="modal"]').click();
+                location.reload();
+            } else {
+                alert('Error adding fixtures: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error adding fixtures: ' + error);
+        })
+        .finally(() => {
+            this.disabled = false;
+            this.textContent = 'Add Fixtures';
+        });
+    });
+    
+    // Reset fixtures modal when hidden
+    document.getElementById('addFixturesModal').addEventListener('hidden.bs.modal', function() {
+        document.getElementById('fixtureRoundSelect').value = '';
+        document.getElementById('fixtureRoundInfo').innerHTML = '';
+        document.getElementById('confirmAddFixturesBtn').disabled = true;
     });
 });
 </script>

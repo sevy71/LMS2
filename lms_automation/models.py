@@ -132,4 +132,9 @@ class PickToken(db.Model):
         """Get the full pick URL for this token"""
         # Ensure base_url is clean and properly formatted
         base_url = base_url.rstrip('/')
+        
+        # Ensure base_url has protocol (critical for mobile WhatsApp)
+        if not base_url.startswith(('http://', 'https://')):
+            base_url = f"https://{base_url}"
+            
         return f"{base_url}/pick/{self.token}"
