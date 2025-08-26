@@ -227,21 +227,18 @@ def handle_players():
         try:
             data = request.get_json()
             
-            if not data or not data.get('name'):
-                return jsonify({'success': False, 'error': 'Player name is required'}), 400
+            if not data or not data.get('name') or not data.get('whatsapp_number'):
+                return jsonify({'success': False, 'error': 'Name and WhatsApp number are required'}), 400
             
-            whatsapp_number = data.get('whatsapp_number', '').strip()
-            
-            # If WhatsApp number is provided, check for duplicates
-            if whatsapp_number:
-                existing_player = Player.query.filter_by(whatsapp_number=whatsapp_number).first()
-                if existing_player:
-                    return jsonify({'success': False, 'error': 'Player with this WhatsApp number already exists'}), 400
+            # Check if player already exists
+            existing_player = Player.query.filter_by(whatsapp_number=data['whatsapp_number']).first()
+            if existing_player:
+                return jsonify({'success': False, 'error': 'Player with this WhatsApp number already exists'}), 400
             
             # Create new player
             player = Player(
                 name=data['name'].strip(),
-                whatsapp_number=whatsapp_number if whatsapp_number else None
+                whatsapp_number=data['whatsapp_number'].strip()
             )
             
             db.session.add(player)
@@ -344,7 +341,7 @@ def handle_player_by_id(player_id):
             
             # Update player
             player.name = name
-            player.whatsapp_number = whatsapp if whatsapp else None
+            player.whatsapp_number = whatsapp
             
             db.session.commit()
             

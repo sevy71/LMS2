@@ -191,9 +191,9 @@
                         <input type="text" class="form-control" id="playerName" required>
                     </div>
                     <div class="mb-3">
-                        <label for="playerWhatsapp" class="form-label">WhatsApp Number (Optional)</label>
-                        <input type="tel" class="form-control" id="playerWhatsapp" placeholder="+44XXXXXXXXXX">
-                        <div class="form-text">Include country code (e.g., +44 for UK). Can be left empty.</div>
+                        <label for="playerWhatsapp" class="form-label">WhatsApp Number</label>
+                        <input type="tel" class="form-control" id="playerWhatsapp" placeholder="+44XXXXXXXXXX" required>
+                        <div class="form-text">Include country code (e.g., +44 for UK)</div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -634,8 +634,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const name = document.getElementById('playerName').value.trim();
         const whatsapp = document.getElementById('playerWhatsapp').value.trim();
         
-        if (!name) {
-            alert('Player name is required');
+        if (!name || !whatsapp) {
+            alert('Please fill in all fields');
             return;
         }
         

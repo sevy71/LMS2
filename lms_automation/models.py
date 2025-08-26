@@ -10,7 +10,7 @@ class Player(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    whatsapp_number = db.Column(db.String(20), nullable=True, unique=True)
+    whatsapp_number = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), default='active')  # active, eliminated, winner
     unreachable = db.Column(db.Boolean, default=False)
     
