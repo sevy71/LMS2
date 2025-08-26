@@ -29,7 +29,7 @@ class FootballDataAPI:
         try:
             url = f"{self.base_url}/competitions/{self.premier_league_id}/matches"
             
-            # Use current season (2025/26) if no season specified
+            # Use current season (2025/26) if no season specified  
             if season is None:
                 params = {'season': '2025'}  # Current 2025/26 season
             else:
@@ -52,7 +52,14 @@ class FootballDataAPI:
                 time.sleep(60)
                 response = requests.get(url, headers=self.headers, params=params, timeout=10)
             
-            if response.status_code != 200:
+            if response.status_code == 403:
+                print("API Error: 403 Forbidden - Check your API token and subscription")
+                print(f"Using API token: {self.api_token[:10]}...")
+                return {'matches': []}
+            elif response.status_code == 404:
+                print(f"API Error: 404 Not Found - Season or competition not found")
+                return {'matches': []}  
+            elif response.status_code != 200:
                 print(f"API Error: {response.status_code} - {response.text}")
                 return {'matches': []}
             
