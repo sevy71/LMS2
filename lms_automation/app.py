@@ -97,6 +97,47 @@ def change_admin_password():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/picks-grid')
+@admin_required
+def picks_grid():
+    """Display a grid of all player picks for all rounds."""
+    return render_template('picks_grid.html')
+
+@app.route('/api/picks-grid-data')
+@admin_required
+def get_picks_grid_data():
+    """Provide data for the picks grid."""
+    try:
+        rounds = Round.query.order_by(Round.round_number).all()
+        players = Player.query.order_by(Player.name).all()
+        picks = Pick.query.all()
+
+        # Create a mapping of (player_id, round_id) -> team_picked
+        picks_map = {(p.player_id, p.round_id): p.team_picked for p in picks}
+
+        # Prepare player data
+        players_data = []
+        for player in players:
+            player_picks = {}
+            for r in rounds:
+                team = picks_map.get((player.id, r.id), '-') # Default to '-' if no pick
+                player_picks[r.round_number] = team
+            
+            players_data.append({
+                'name': player.name,
+                'status': player.status,
+                'picks': player_picks
+            })
+
+        return jsonify({
+            'success': True,
+            'rounds': [r.round_number for r in rounds],
+            'players': players_data
+        })
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/')
 def index():
     return render_template('index.html')

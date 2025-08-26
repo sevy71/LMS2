@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}Picks Grid - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12 d-flex justify-content-between align-items-center">
+            <h1 class="mb-4">Picks Grid</h1>
+            <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-arrow-left"></i> Back to Dashboard
+            </a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h5 class="card-title mb-0">All Player Picks by Round</h5>
+        </div>
+        <div class="card-body">
+            <div id="grid-container" class="table-responsive">
+                <p>Loading picks data...</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const gridContainer = document.getElementById('grid-container');
+
+    fetch('/api/picks-grid-data')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                renderGrid(data);
+            } else {
+                gridContainer.innerHTML = `<div class="alert alert-danger">Error loading data: ${data.error}</div>`;
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching picks grid data:', error);
+            gridContainer.innerHTML = '<div class="alert alert-danger">Could not fetch data from the server.</div>';
+        });
+
+    function renderGrid(data) {
+        const rounds = data.rounds;
+        const players = data.players;
+
+        if (players.length === 0) {
+            gridContainer.innerHTML = '<p class="text-muted">No players found.</p>';
+            return;
+        }
+
+        let tableHtml = '<table class="table table-striped table-bordered table-sm">';
+        
+        // --- Render Header ---
+        tableHtml += '<thead><tr><th>Player</th>';
+        rounds.forEach(roundNumber => {
+            tableHtml += `<th>Round ${roundNumber}</th>`;
+        });
+        tableHtml += '</tr></thead>';
+
+        // --- Render Body ---
+        tableHtml += '<tbody>';
+        players.forEach(player => {
+            let statusClass = '';
+            if (player.status === 'eliminated') {
+                statusClass = 'table-danger';
+            } else if (player.status === 'winner') {
+                statusClass = 'table-success';
+            }
+
+            tableHtml += `<tr class="${statusClass}">`;
+            tableHtml += `<td><strong>${player.name}</strong></td>`;
+            
+            rounds.forEach(roundNumber => {
+                const pick = player.picks[roundNumber] || '-';
+                tableHtml += `<td>${pick}</td>`;
+            });
+
+            tableHtml += '</tr>';
+        });
+        tableHtml += '</tbody>';
+
+        tableHtml += '</table>';
+        gridContainer.innerHTML = tableHtml;
+    }
+});
+</script>
+{% endblock %}
