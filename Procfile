@@ -1,1 +1,1 @@
-web: gunicorn lms_automation.app:app
+web: flask --app lms_automation/app.py db upgrade && gunicorn lms_automation.app:app
