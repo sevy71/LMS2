@@ -772,7 +772,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                alert(`Game reset successfully!\n\nDeleted:\n- ${data.rounds_deleted} rounds\n- ${data.fixtures_deleted} fixtures\n- ${data.picks_deleted} picks\n- ${data.messages_deleted} messages\n\nPlayers preserved: ${data.players_reset}`);
+                alert(`Game reset successfully!\n\nDeleted:\n- ${data.rounds_deleted} rounds\n- ${data.fixtures_deleted} fixtures\n- ${data.picks_deleted} picks\n- ${data.pick_tokens_deleted} pick tokens\n\nPlayers preserved: ${data.players_reset}`);
                 location.reload();
             } else {
                 alert('Error resetting game: ' + data.error);

@@ -130,4 +130,6 @@ class PickToken(db.Model):
     
     def get_pick_url(self, base_url='https://localhost:5000'):
         """Get the full pick URL for this token"""
-        return f"{base_url.rstrip('/')}/pick/{self.token}"
+        # Ensure base_url is clean and properly formatted
+        base_url = base_url.rstrip('/')
+        return f"{base_url}/pick/{self.token}"

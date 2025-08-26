@@ -5,24 +5,17 @@ from dotenv import load_dotenv
 from datetime import datetime
 import urllib.parse
 
+load_dotenv()
+
 app = Flask(__name__)
-
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-# Database configuration
-# Railway provides multiple URLs. Let's try them in order.
-# DATABASE_PUBLIC_URL is for external connections, good for debugging.
-# DATABASE_URL is for internal connections, preferred for production.
-database_uri = None
-if os.environ.get('DATABASE_PUBLIC_URL'):
-    database_uri = os.environ.get('DATABASE_PUBLIC_URL')
-    print("Using DATABASE_PUBLIC_URL")
-elif os.environ.get('DATABASE_URL'):
-    database_uri = os.environ.get('DATABASE_URL')
-    print("Using DATABASE_URL")
 
+# --- Database configuration ---
+database_uri = os.environ.get('DATABASE_PUBLIC_URL') or os.environ.get('DATABASE_URL')
 if database_uri:
     # SQLAlchemy prefers 'postgresql' over 'postgres'
     app.config['SQLALCHEMY_DATABASE_URI'] = database_uri.replace('postgres://', 'postgresql://')
+    print("Using DATABASE_PUBLIC_URL" if os.environ.get('DATABASE_PUBLIC_URL') else "Using DATABASE_URL")
 else:
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///lms.db'
     print("Using local SQLite database.")
@@ -31,10 +24,8 @@ print(f"Database URI set to: {app.config['SQLALCHEMY_DATABASE_URI']}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Import models and db
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from models import db, Player, Round, Fixture, Pick, PickToken
+from .models import db, Player, Round, Fixture, Pick, PickToken
+
 
 # Initialize db with app
 db.init_app(app)
@@ -61,8 +52,18 @@ def send_picks():
     for player in active_players:
         pick_token = PickToken.create_for_player_round(player.id, current_round.id)
         db.session.commit() # Commit to get the token
-        base_url = os.environ.get('BASE_URL', request.url_root.replace('http://', 'https://'))
+        # Get base URL - prioritize Railway deployment URL
+        base_url = os.environ.get('BASE_URL')
+        if not base_url:
+            # Fallback to request URL but ensure it's HTTPS for production
+            base_url = request.url_root.rstrip('/')
+            if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
+                base_url = base_url.replace('http://', 'https://')
+        
         pick_url = pick_token.get_pick_url(base_url)
+        
+        # Debug logging
+        print(f"Generated pick URL for {player.name}: {pick_url}")
         
         message = f"""🏆 Last Man Standing - Round {current_round.round_number}
 
@@ -305,7 +306,7 @@ def handle_rounds():
             
             # Fetch and populate fixtures
             try:
-                from football_api import FootballDataAPI
+                from .football_data_api import FootballDataAPI
                 api = FootballDataAPI()
                 fixtures_data = api.get_premier_league_fixtures(pl_matchday)
                 formatted_fixtures = api.format_fixtures_for_db(fixtures_data, pl_matchday)
@@ -355,7 +356,7 @@ def handle_rounds():
 def get_available_matchdays():
     """Get available Premier League matchdays"""
     try:
-        from football_api import FootballDataAPI
+        from .football_data_api import FootballDataAPI
         api = FootballDataAPI()
         
         print("Starting matchdays request...")
@@ -392,7 +393,7 @@ def get_available_matchdays():
 def get_matchday_info(matchday):
     """Get information about a specific matchday"""
     try:
-        from football_api import FootballDataAPI
+        from .football_data_api import FootballDataAPI
         api = FootballDataAPI()
         
         # Get fixtures for this specific matchday
@@ -449,18 +450,23 @@ def reset_game():
         rounds_count = Round.query.count()
         fixtures_count = Fixture.query.count()
         picks_count = Pick.query.count()
+        pick_tokens_count = PickToken.query.count()
         players_count = Player.query.count()
         
-        # Delete all picks
+        # Delete in correct order to handle foreign key constraints
+        # 1. Delete pick tokens (references players and rounds)
+        PickToken.query.delete()
+        
+        # 2. Delete all picks (references players and rounds)
         Pick.query.delete()
         
-        # Delete all fixtures
+        # 3. Delete all fixtures (references rounds)
         Fixture.query.delete()
         
-        # Delete all rounds
+        # 4. Delete all rounds (now safe to delete)
         Round.query.delete()
         
-        # Reset all players to active status
+        # 5. Reset all players to active status (but keep the player records)
         Player.query.update({'status': 'active', 'unreachable': False})
         
         # Commit all changes
@@ -471,6 +477,7 @@ def reset_game():
             'rounds_deleted': rounds_count,
             'fixtures_deleted': fixtures_count,
             'picks_deleted': picks_count,
+            'pick_tokens_deleted': pick_tokens_count,
             'players_reset': players_count
         })
         
