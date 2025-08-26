@@ -24,7 +24,10 @@ print(f"Database URI set to: {app.config['SQLALCHEMY_DATABASE_URI']}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Import models and db
-from .models import db, Player, Round, Fixture, Pick, PickToken
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from models import db, Player, Round, Fixture, Pick, PickToken
 
 
 # Initialize db with app
@@ -91,8 +94,9 @@ def send_picks():
         
         message = "\n".join(message_lines)
         
-        # Encode for WhatsApp with minimal encoding to preserve URL clickability
-        encoded_message = urllib.parse.quote(message, safe=':/?#[]@!$&\'()*+,;=.-_~')
+        # Don't encode the URL at all - WhatsApp mobile is very sensitive to URL encoding
+        # Just encode line breaks and special characters, preserve the URL completely
+        encoded_message = message.replace('\n', '%0A')
         
         player.whatsapp_link = f"https://web.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={encoded_message}"
         
