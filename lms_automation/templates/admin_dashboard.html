@@ -6,9 +6,14 @@
 <div class="row">
     <div class="col-12 d-flex justify-content-between align-items-center">
         <h1 class="mb-4">Admin Dashboard</h1>
-        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">
-            <i class="fas fa-sign-out-alt"></i> Logout
-        </a>
+        <div>
+            <button class="btn btn-outline-info me-2" data-bs-toggle="modal" data-bs-target="#changePasswordModal">
+                <i class="fas fa-key"></i> Change Password
+            </button>
+            <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-sign-out-alt"></i> Logout
+            </a>
+        </div>
     </div>
 </div>
 
@@ -111,6 +116,11 @@
                                         </td>
                                         <td>
                                             <button class="btn btn-sm btn-outline-primary edit-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}" data-player-whatsapp="{{ player.whatsapp_number }}">Edit</button>
+                                            {% if player.status == 'active' %}
+                                                <button class="btn btn-sm btn-outline-warning eliminate-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}">Eliminate</button>
+                                            {% else %}
+                                                <button class="btn btn-sm btn-outline-success reactivate-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}">Reactivate</button>
+                                            {% endif %}
                                             <button class="btn btn-sm btn-outline-danger delete-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}">Delete</button>
                                         </td>
                                     </tr>
@@ -146,8 +156,14 @@
                     <div class="col-md-3 mb-2">
                         <button class="btn btn-info w-100" data-bs-toggle="modal" data-bs-target="#resultsModal">Process Results</button>
                     </div>
+                    <div class="col-md-3 mb-2">
+                        <button class="btn btn-success w-100" data-bs-toggle="modal" data-bs-target="#statsModal">📊 Player Statistics</button>
+                    </div>
                 </div>
                 <div class="row mt-2">
+                    <div class="col-md-3 mb-2">
+                        <button class="btn btn-primary w-100" data-bs-toggle="modal" data-bs-target="#exportModal">💾 Export/Backup</button>
+                    </div>
                     <div class="col-md-3 mb-2">
                         <button class="btn btn-danger w-100" data-bs-toggle="modal" data-bs-target="#resetGameModal">Reset Game</button>
                     </div>
@@ -390,6 +406,153 @@
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-warning" id="confirmSendLinksBtn" disabled>Send Pick Links</button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Player Statistics Modal -->
+<div class="modal fade" id="statsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">📊 Player Statistics Dashboard</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row mb-4">
+                    <div class="col-12">
+                        <div id="competitionStats" class="row">
+                            <!-- Competition stats will load here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="row">
+                    <div class="col-12">
+                        <h6>Individual Player Statistics</h6>
+                        <div id="playerStatsTable">
+                            Loading player statistics...
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <h6>Pick History</h6>
+                        <div id="pickHistoryTable">
+                            Loading pick history...
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Export/Backup Modal -->
+<div class="modal fade" id="exportModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">💾 Export & Backup Data</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info">
+                    <strong>Export Options:</strong> Download your competition data in various formats for backup or analysis.
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">👥 Players Data</h6>
+                                <p class="card-text">Export all player information including status and contact details</p>
+                                <button class="btn btn-primary export-btn" data-export="players">Download Players CSV</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6 mb-3">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">🏆 Rounds & Fixtures</h6>
+                                <p class="card-text">Export all rounds, fixtures, and match results</p>
+                                <button class="btn btn-primary export-btn" data-export="rounds">Download Rounds CSV</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6 mb-3">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">🎯 Player Picks</h6>
+                                <p class="card-text">Export all player picks with results</p>
+                                <button class="btn btn-primary export-btn" data-export="picks">Download Picks CSV</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6 mb-3">
+                        <div class="card">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">📊 Full Statistics</h6>
+                                <p class="card-text">Export comprehensive player statistics</p>
+                                <button class="btn btn-primary export-btn" data-export="stats">Download Stats CSV</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-12 mt-3">
+                        <div class="card border-success">
+                            <div class="card-body text-center">
+                                <h6 class="card-title">🔄 Complete Backup</h6>
+                                <p class="card-text">Export everything in a single comprehensive file</p>
+                                <button class="btn btn-success btn-lg export-btn" data-export="full">Download Complete Backup</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal fade" id="changePasswordModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Change Admin Password</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="changePasswordForm">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="currentPassword" class="form-label">Current Password</label>
+                        <input type="password" class="form-control" id="currentPassword" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="newPassword" class="form-label">New Password</label>
+                        <input type="password" class="form-control" id="newPassword" required minlength="6">
+                        <div class="form-text">Minimum 6 characters</div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="confirmPassword" class="form-label">Confirm New Password</label>
+                        <input type="password" class="form-control" id="confirmPassword" required minlength="6">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Change Password</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
@@ -652,6 +815,139 @@ document.addEventListener('DOMContentLoaded', function() {
         .catch(error => {
             alert('Error deleting player: ' + error);
         });
+    });
+    
+    // Handle eliminate player buttons
+    document.querySelectorAll('.eliminate-player-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            
+            if (!confirm(`Are you sure you want to eliminate ${playerName}? This will mark them as eliminated from the competition.`)) {
+                return;
+            }
+            
+            this.disabled = true;
+            this.textContent = 'Eliminating...';
+            
+            fetch(`/api/players/${playerId}/status`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ status: 'eliminated' })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Error eliminating player: ' + data.error);
+                    this.disabled = false;
+                    this.textContent = 'Eliminate';
+                }
+            })
+            .catch(error => {
+                alert('Error eliminating player: ' + error);
+                this.disabled = false;
+                this.textContent = 'Eliminate';
+            });
+        });
+    });
+    
+    // Handle reactivate player buttons
+    document.querySelectorAll('.reactivate-player-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            
+            if (!confirm(`Are you sure you want to reactivate ${playerName}? This will bring them back into the competition.`)) {
+                return;
+            }
+            
+            this.disabled = true;
+            this.textContent = 'Reactivating...';
+            
+            fetch(`/api/players/${playerId}/status`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ status: 'active' })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Error reactivating player: ' + data.error);
+                    this.disabled = false;
+                    this.textContent = 'Reactivate';
+                }
+            })
+            .catch(error => {
+                alert('Error reactivating player: ' + error);
+                this.disabled = false;
+                this.textContent = 'Reactivate';
+            });
+        });
+    });
+    
+    // Handle password change form
+    document.getElementById('changePasswordForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const currentPassword = document.getElementById('currentPassword').value;
+        const newPassword = document.getElementById('newPassword').value;
+        const confirmPassword = document.getElementById('confirmPassword').value;
+        
+        if (newPassword !== confirmPassword) {
+            alert('New password and confirmation do not match');
+            return;
+        }
+        
+        if (newPassword.length < 6) {
+            alert('New password must be at least 6 characters');
+            return;
+        }
+        
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Changing...';
+        
+        fetch('/admin/change-password', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                current_password: currentPassword,
+                new_password: newPassword
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message);
+                document.getElementById('changePasswordModal').querySelector('[data-bs-dismiss="modal"]').click();
+                // Clear form
+                this.reset();
+            } else {
+                alert('Error changing password: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error changing password: ' + error);
+        })
+        .finally(() => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Change Password';
+        });
+    });
+    
+    // Reset password form when modal is hidden
+    document.getElementById('changePasswordModal').addEventListener('hidden.bs.modal', function() {
+        document.getElementById('changePasswordForm').reset();
     });
     
     // Auto-populate next round number and load matchdays when modal opens

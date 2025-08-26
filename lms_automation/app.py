@@ -66,6 +66,37 @@ def admin_logout():
     flash('You have been logged out', 'info')
     return redirect(url_for('index'))
 
+@app.route('/admin/change-password', methods=['POST'])
+@admin_required
+def change_admin_password():
+    try:
+        data = request.get_json()
+        current_password = data.get('current_password')
+        new_password = data.get('new_password')
+        
+        if not current_password or not new_password:
+            return jsonify({'success': False, 'error': 'Current and new password are required'}), 400
+        
+        if current_password != ADMIN_PASSWORD:
+            return jsonify({'success': False, 'error': 'Current password is incorrect'}), 400
+        
+        if len(new_password) < 6:
+            return jsonify({'success': False, 'error': 'New password must be at least 6 characters'}), 400
+        
+        # In a real app, you'd update the password in a database or config file
+        # For now, we'll just update the environment variable (temporary)
+        global ADMIN_PASSWORD
+        ADMIN_PASSWORD = new_password
+        os.environ['ADMIN_PASSWORD'] = new_password
+        
+        return jsonify({
+            'success': True,
+            'message': 'Password changed successfully. Please update your ADMIN_PASSWORD environment variable in Railway.'
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -730,6 +761,263 @@ def get_round_picks(round_id):
             'fixtures': fixtures_data,
             'picks': picks_data
         })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/players/<int:player_id>/status', methods=['PUT'])
+@admin_required
+def update_player_status(player_id):
+    """Manually update player status (eliminate/reactivate)"""
+    try:
+        data = request.get_json()
+        new_status = data.get('status')
+        
+        if new_status not in ['active', 'eliminated']:
+            return jsonify({'success': False, 'error': 'Invalid status. Must be "active" or "eliminated"'}), 400
+        
+        player = Player.query.get_or_404(player_id)
+        old_status = player.status
+        player.status = new_status
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'player_id': player_id,
+            'player_name': player.name,
+            'old_status': old_status,
+            'new_status': new_status
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/statistics')
+@admin_required
+def get_statistics():
+    """Get comprehensive statistics for the competition"""
+    try:
+        # Competition overview stats
+        total_players = Player.query.count()
+        active_players = Player.query.filter_by(status='active').count()
+        eliminated_players = Player.query.filter_by(status='eliminated').count()
+        total_rounds = Round.query.count()
+        completed_rounds = Round.query.filter_by(status='completed').count()
+        active_round = Round.query.filter_by(status='active').first()
+        
+        # Individual player stats
+        players = Player.query.all()
+        player_stats = []
+        
+        for player in players:
+            picks = Pick.query.filter_by(player_id=player.id).all()
+            total_picks = len(picks)
+            winning_picks = len([p for p in picks if p.is_winner])
+            teams_used = list(set([p.team_picked for p in picks]))
+            
+            # Calculate survival streak
+            survival_streak = 0
+            for pick in reversed(picks):  # Start from most recent
+                if pick.is_winner == True:
+                    survival_streak += 1
+                elif pick.is_winner == False:
+                    break
+            
+            player_stats.append({
+                'id': player.id,
+                'name': player.name,
+                'status': player.status,
+                'total_picks': total_picks,
+                'winning_picks': winning_picks,
+                'success_rate': round((winning_picks / total_picks * 100) if total_picks > 0 else 0, 1),
+                'teams_used': teams_used,
+                'teams_used_count': len(teams_used),
+                'current_streak': survival_streak
+            })
+        
+        # Pick history for all players
+        all_picks = Pick.query.join(Player).join(Round).all()
+        pick_history = []
+        
+        for pick in all_picks:
+            pick_history.append({
+                'player_name': pick.player.name,
+                'round_number': pick.round.round_number,
+                'team_picked': pick.team_picked,
+                'result': 'Winner' if pick.is_winner == True else ('Eliminated' if pick.is_winner == False else 'Pending'),
+                'pick_date': pick.created_at.strftime('%Y-%m-%d %H:%M') if pick.created_at else 'Unknown'
+            })
+        
+        return jsonify({
+            'success': True,
+            'competition_stats': {
+                'total_players': total_players,
+                'active_players': active_players,
+                'eliminated_players': eliminated_players,
+                'elimination_rate': round((eliminated_players / total_players * 100) if total_players > 0 else 0, 1),
+                'total_rounds': total_rounds,
+                'completed_rounds': completed_rounds,
+                'current_round': active_round.round_number if active_round else None
+            },
+            'player_stats': player_stats,
+            'pick_history': pick_history
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/export/<export_type>')
+@admin_required
+def export_data(export_type):
+    """Export data in CSV format"""
+    try:
+        import csv
+        from io import StringIO
+        from flask import make_response
+        
+        output = StringIO()
+        
+        if export_type == 'players':
+            writer = csv.writer(output)
+            writer.writerow(['ID', 'Name', 'WhatsApp Number', 'Status', 'Unreachable', 'Created Date'])
+            
+            players = Player.query.all()
+            for player in players:
+                writer.writerow([
+                    player.id,
+                    player.name,
+                    player.whatsapp_number,
+                    player.status,
+                    player.unreachable,
+                    player.created_at.strftime('%Y-%m-%d %H:%M:%S') if player.created_at else ''
+                ])
+            
+            filename = 'lms_players.csv'
+            
+        elif export_type == 'rounds':
+            writer = csv.writer(output)
+            writer.writerow(['Round ID', 'Round Number', 'PL Matchday', 'Status', 'Start Date', 'End Date', 'Fixture Count'])
+            
+            rounds = Round.query.all()
+            for round_obj in rounds:
+                fixture_count = Fixture.query.filter_by(round_id=round_obj.id).count()
+                writer.writerow([
+                    round_obj.id,
+                    round_obj.round_number,
+                    round_obj.pl_matchday,
+                    round_obj.status,
+                    round_obj.start_date.strftime('%Y-%m-%d %H:%M:%S') if round_obj.start_date else '',
+                    round_obj.end_date.strftime('%Y-%m-%d %H:%M:%S') if round_obj.end_date else '',
+                    fixture_count
+                ])
+            
+            filename = 'lms_rounds.csv'
+            
+        elif export_type == 'picks':
+            writer = csv.writer(output)
+            writer.writerow(['Pick ID', 'Player Name', 'Round Number', 'Team Picked', 'Result', 'Is Winner', 'Is Eliminated', 'Pick Date'])
+            
+            picks = Pick.query.join(Player).join(Round).all()
+            for pick in picks:
+                result = 'Winner' if pick.is_winner == True else ('Eliminated' if pick.is_winner == False else 'Pending')
+                writer.writerow([
+                    pick.id,
+                    pick.player.name,
+                    pick.round.round_number,
+                    pick.team_picked,
+                    result,
+                    pick.is_winner,
+                    pick.is_eliminated,
+                    pick.created_at.strftime('%Y-%m-%d %H:%M:%S') if pick.created_at else ''
+                ])
+            
+            filename = 'lms_picks.csv'
+            
+        elif export_type == 'stats':
+            writer = csv.writer(output)
+            writer.writerow(['Player Name', 'Status', 'Total Picks', 'Winning Picks', 'Success Rate %', 'Teams Used', 'Current Streak'])
+            
+            players = Player.query.all()
+            for player in players:
+                picks = Pick.query.filter_by(player_id=player.id).all()
+                total_picks = len(picks)
+                winning_picks = len([p for p in picks if p.is_winner])
+                success_rate = round((winning_picks / total_picks * 100) if total_picks > 0 else 0, 1)
+                teams_used = list(set([p.team_picked for p in picks]))
+                
+                # Calculate current streak
+                survival_streak = 0
+                for pick in reversed(picks):
+                    if pick.is_winner == True:
+                        survival_streak += 1
+                    elif pick.is_winner == False:
+                        break
+                
+                writer.writerow([
+                    player.name,
+                    player.status,
+                    total_picks,
+                    winning_picks,
+                    f"{success_rate}%",
+                    ', '.join(teams_used),
+                    survival_streak
+                ])
+            
+            filename = 'lms_statistics.csv'
+            
+        elif export_type == 'full':
+            # Create a comprehensive backup with multiple sheets/sections
+            writer = csv.writer(output)
+            
+            # Players section
+            writer.writerow(['=== PLAYERS ==='])
+            writer.writerow(['ID', 'Name', 'WhatsApp Number', 'Status', 'Unreachable', 'Created Date'])
+            players = Player.query.all()
+            for player in players:
+                writer.writerow([
+                    player.id, player.name, player.whatsapp_number, player.status, 
+                    player.unreachable, player.created_at.strftime('%Y-%m-%d %H:%M:%S') if player.created_at else ''
+                ])
+            
+            writer.writerow([])  # Empty row separator
+            
+            # Rounds section
+            writer.writerow(['=== ROUNDS ==='])
+            writer.writerow(['Round ID', 'Round Number', 'PL Matchday', 'Status', 'Start Date', 'End Date'])
+            rounds = Round.query.all()
+            for round_obj in rounds:
+                writer.writerow([
+                    round_obj.id, round_obj.round_number, round_obj.pl_matchday, round_obj.status,
+                    round_obj.start_date.strftime('%Y-%m-%d %H:%M:%S') if round_obj.start_date else '',
+                    round_obj.end_date.strftime('%Y-%m-%d %H:%M:%S') if round_obj.end_date else ''
+                ])
+            
+            writer.writerow([])
+            
+            # Picks section
+            writer.writerow(['=== PICKS ==='])
+            writer.writerow(['Pick ID', 'Player Name', 'Round Number', 'Team Picked', 'Result', 'Pick Date'])
+            picks = Pick.query.join(Player).join(Round).all()
+            for pick in picks:
+                result = 'Winner' if pick.is_winner == True else ('Eliminated' if pick.is_winner == False else 'Pending')
+                writer.writerow([
+                    pick.id, pick.player.name, pick.round.round_number, pick.team_picked, result,
+                    pick.created_at.strftime('%Y-%m-%d %H:%M:%S') if pick.created_at else ''
+                ])
+            
+            filename = 'lms_complete_backup.csv'
+            
+        else:
+            return jsonify({'success': False, 'error': 'Invalid export type'}), 400
+        
+        # Create response
+        response = make_response(output.getvalue())
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = f'attachment; filename={filename}'
+        
+        return response
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
