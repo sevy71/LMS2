@@ -70,6 +70,7 @@ def admin_logout():
 @admin_required
 def change_admin_password():
     try:
+        global ADMIN_PASSWORD
         data = request.get_json()
         current_password = data.get('current_password')
         new_password = data.get('new_password')
@@ -85,7 +86,6 @@ def change_admin_password():
         
         # In a real app, you'd update the password in a database or config file
         # For now, we'll just update the environment variable (temporary)
-        global ADMIN_PASSWORD
         ADMIN_PASSWORD = new_password
         os.environ['ADMIN_PASSWORD'] = new_password
         
