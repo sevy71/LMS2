@@ -8,12 +8,26 @@ import urllib.parse
 app = Flask(__name__)
 
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-database_url = os.environ.get('DATABASE_URL')
-if database_url:
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_url.replace('postgres://', 'postgresql://')
+# Database configuration
+# Railway provides multiple URLs. Let's try them in order.
+# DATABASE_PUBLIC_URL is for external connections, good for debugging.
+# DATABASE_URL is for internal connections, preferred for production.
+database_uri = None
+if os.environ.get('DATABASE_PUBLIC_URL'):
+    database_uri = os.environ.get('DATABASE_PUBLIC_URL')
+    print("Using DATABASE_PUBLIC_URL")
+elif os.environ.get('DATABASE_URL'):
+    database_uri = os.environ.get('DATABASE_URL')
+    print("Using DATABASE_URL")
+
+if database_uri:
+    # SQLAlchemy prefers 'postgresql' over 'postgres'
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_uri.replace('postgres://', 'postgresql://')
 else:
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///lms.db'
-print(f"DATABASE_URL from environment: {os.environ.get('DATABASE_URL')}")
+    print("Using local SQLite database.")
+
+print(f"Database URI set to: {app.config['SQLALCHEMY_DATABASE_URI']}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Import models and db
