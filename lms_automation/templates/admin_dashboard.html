@@ -4,8 +4,11 @@
 
 {% block content %}
 <div class="row">
-    <div class="col-12">
+    <div class="col-12 d-flex justify-content-between align-items-center">
         <h1 class="mb-4">Admin Dashboard</h1>
+        <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">
+            <i class="fas fa-sign-out-alt"></i> Logout
+        </a>
     </div>
 </div>
 
@@ -141,7 +144,7 @@
                         <a href="{{ url_for('send_picks') }}" class="btn btn-warning w-100">Send Pick Links</a>
                     </div>
                     <div class="col-md-3 mb-2">
-                        <button class="btn btn-info w-100">View Reports</button>
+                        <button class="btn btn-info w-100" data-bs-toggle="modal" data-bs-target="#resultsModal">Process Results</button>
                     </div>
                 </div>
                 <div class="row mt-2">
@@ -386,6 +389,35 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-warning" id="confirmSendLinksBtn" disabled>Send Pick Links</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Process Results Modal -->
+<div class="modal fade" id="resultsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Process Match Results</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label for="resultsRoundSelect" class="form-label">Select Round</label>
+                    <select class="form-control" id="resultsRoundSelect" required>
+                        <option value="">Loading rounds...</option>
+                    </select>
+                    <div class="form-text">Select the round to process results for</div>
+                </div>
+                
+                <div id="resultsRoundInfo" class="mt-3"></div>
+                <div id="roundFixtures" class="mt-3"></div>
+                <div id="playerPicks" class="mt-3"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" id="processResultsBtn" disabled>Process Results & Eliminate Players</button>
             </div>
         </div>
     </div>
@@ -1092,6 +1124,241 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('fixtureRoundSelect').value = '';
         document.getElementById('fixtureRoundInfo').innerHTML = '';
         document.getElementById('confirmAddFixturesBtn').disabled = true;
+    });
+    
+    // Load rounds when Process Results modal opens
+    document.getElementById('resultsModal').addEventListener('show.bs.modal', function() {
+        const roundSelect = document.getElementById('resultsRoundSelect');
+        roundSelect.innerHTML = '<option value="">Loading rounds...</option>';
+        document.getElementById('processResultsBtn').disabled = true;
+        
+        fetch('/api/rounds')
+            .then(response => response.json())
+            .then(data => {
+                roundSelect.innerHTML = '<option value="">Select a round...</option>';
+                data.forEach(round => {
+                    const option = document.createElement('option');
+                    option.value = round.id;
+                    option.textContent = `Round ${round.round_number} (${round.status})`;
+                    roundSelect.appendChild(option);
+                });
+            })
+            .catch(error => {
+                console.error('Error loading rounds:', error);
+                roundSelect.innerHTML = '<option value="">Error loading rounds</option>';
+            });
+    });
+    
+    // Handle round selection for results
+    document.getElementById('resultsRoundSelect').addEventListener('change', function() {
+        const roundId = this.value;
+        const processBtn = document.getElementById('processResultsBtn');
+        const roundInfo = document.getElementById('resultsRoundInfo');
+        const fixturesDiv = document.getElementById('roundFixtures');
+        const picksDiv = document.getElementById('playerPicks');
+        
+        if (!roundId) {
+            processBtn.disabled = true;
+            roundInfo.innerHTML = '';
+            fixturesDiv.innerHTML = '';
+            picksDiv.innerHTML = '';
+            return;
+        }
+        
+        roundInfo.innerHTML = 'Loading round data...';
+        
+        fetch(`/api/rounds/${roundId}/picks`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const round = data.round;
+                    const fixtures = data.fixtures;
+                    const picks = data.picks;
+                    
+                    // Display round info
+                    roundInfo.innerHTML = `
+                        <div class="alert alert-info">
+                            <strong>Round ${round.round_number}</strong> - Status: <span class="badge bg-${round.status === 'active' ? 'success' : 'secondary'}">${round.status}</span><br>
+                            Fixtures: ${fixtures.length} | Player Picks: ${picks.length}
+                        </div>
+                    `;
+                    
+                    // Display fixtures with score inputs
+                    if (fixtures.length > 0) {
+                        let fixturesHtml = `
+                            <h6>Match Results</h6>
+                            <div class="row">
+                        `;
+                        
+                        fixtures.forEach(fixture => {
+                            fixturesHtml += `
+                                <div class="col-md-6 mb-3">
+                                    <div class="card">
+                                        <div class="card-body">
+                                            <h6>${fixture.home_team} vs ${fixture.away_team}</h6>
+                                            <div class="row">
+                                                <div class="col-5">
+                                                    <label class="form-label">${fixture.home_team} Score</label>
+                                                    <input type="number" class="form-control score-input" 
+                                                           data-fixture-id="${fixture.id}" 
+                                                           data-type="home"
+                                                           value="${fixture.home_score || ''}" 
+                                                           min="0" placeholder="0">
+                                                </div>
+                                                <div class="col-2 text-center pt-4">
+                                                    <strong>-</strong>
+                                                </div>
+                                                <div class="col-5">
+                                                    <label class="form-label">${fixture.away_team} Score</label>
+                                                    <input type="number" class="form-control score-input" 
+                                                           data-fixture-id="${fixture.id}" 
+                                                           data-type="away"
+                                                           value="${fixture.away_score || ''}" 
+                                                           min="0" placeholder="0">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        
+                        fixturesHtml += '</div>';
+                        fixturesDiv.innerHTML = fixturesHtml;
+                    }
+                    
+                    // Display player picks
+                    if (picks.length > 0) {
+                        let picksHtml = '<h6 class="mt-4">Player Picks</h6><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Player</th><th>Team Picked</th><th>Current Status</th></tr></thead><tbody>';
+                        
+                        picks.forEach(pick => {
+                            let statusBadge = 'secondary';
+                            let statusText = 'Pending';
+                            
+                            if (pick.is_winner === true) {
+                                statusBadge = 'success';
+                                statusText = 'Winner';
+                            } else if (pick.is_winner === false) {
+                                statusBadge = 'danger';
+                                statusText = 'Eliminated';
+                            }
+                            
+                            picksHtml += `
+                                <tr>
+                                    <td><strong>${pick.player_name}</strong></td>
+                                    <td>${pick.team_picked}</td>
+                                    <td><span class="badge bg-${statusBadge}">${statusText}</span></td>
+                                </tr>
+                            `;
+                        });
+                        
+                        picksHtml += '</tbody></table></div>';
+                        picksDiv.innerHTML = picksHtml;
+                    } else {
+                        picksDiv.innerHTML = '<div class="alert alert-warning">No picks found for this round</div>';
+                    }
+                    
+                    processBtn.disabled = picks.length === 0;
+                } else {
+                    roundInfo.innerHTML = '<div class="alert alert-danger">Error loading round data</div>';
+                    processBtn.disabled = true;
+                }
+            })
+            .catch(error => {
+                console.error('Error loading round data:', error);
+                roundInfo.innerHTML = '<div class="alert alert-danger">Error loading data</div>';
+                processBtn.disabled = true;
+            });
+    });
+    
+    // Handle process results
+    document.getElementById('processResultsBtn').addEventListener('click', function() {
+        const roundId = document.getElementById('resultsRoundSelect').value;
+        
+        if (!roundId) {
+            alert('Please select a round');
+            return;
+        }
+        
+        // Collect all scores
+        const scoreInputs = document.querySelectorAll('.score-input');
+        const results = [];
+        const fixtureResults = {};
+        
+        scoreInputs.forEach(input => {
+            const fixtureId = input.getAttribute('data-fixture-id');
+            const type = input.getAttribute('data-type');
+            const score = parseInt(input.value);
+            
+            if (!isNaN(score)) {
+                if (!fixtureResults[fixtureId]) {
+                    fixtureResults[fixtureId] = { fixture_id: parseInt(fixtureId) };
+                }
+                fixtureResults[fixtureId][type + '_score'] = score;
+            }
+        });
+        
+        // Convert to array and validate
+        for (const fixtureId in fixtureResults) {
+            const result = fixtureResults[fixtureId];
+            if ('home_score' in result && 'away_score' in result) {
+                results.push(result);
+            }
+        }
+        
+        if (results.length === 0) {
+            alert('Please enter scores for at least one match');
+            return;
+        }
+        
+        if (!confirm(`Are you sure you want to process results for ${results.length} matches? This will eliminate players whose teams lost or drew.`)) {
+            return;
+        }
+        
+        this.disabled = true;
+        this.textContent = 'Processing...';
+        
+        fetch(`/api/rounds/${roundId}/process-results`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ results: results })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                let message = `Results processed successfully!\n\n`;
+                message += `• Eliminated: ${data.total_eliminated} players\n`;
+                message += `• Surviving: ${data.total_surviving} players\n\n`;
+                
+                if (data.eliminated_players.length > 0) {
+                    message += `Eliminated players:\n${data.eliminated_players.join(', ')}`;
+                }
+                
+                alert(message);
+                document.getElementById('resultsModal').querySelector('[data-bs-dismiss="modal"]').click();
+                location.reload();
+            } else {
+                alert('Error processing results: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error processing results: ' + error);
+        })
+        .finally(() => {
+            this.disabled = false;
+            this.textContent = 'Process Results & Eliminate Players';
+        });
+    });
+    
+    // Reset results modal when hidden
+    document.getElementById('resultsModal').addEventListener('hidden.bs.modal', function() {
+        document.getElementById('resultsRoundSelect').value = '';
+        document.getElementById('resultsRoundInfo').innerHTML = '';
+        document.getElementById('roundFixtures').innerHTML = '';
+        document.getElementById('playerPicks').innerHTML = '';
+        document.getElementById('processResultsBtn').disabled = true;
     });
 });
 </script>

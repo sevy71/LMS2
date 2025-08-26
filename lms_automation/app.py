@@ -1,9 +1,10 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
 from flask_migrate import Migrate
 import os
 from dotenv import load_dotenv
 from datetime import datetime
 import urllib.parse
+from functools import wraps
 
 load_dotenv()
 
@@ -34,11 +35,43 @@ from models import db, Player, Round, Fixture, Pick, PickToken
 db.init_app(app)
 migrate = Migrate(app, db)
 
+# Admin authentication
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')  # Change this!
+
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('admin_logged_in'):
+            return redirect(url_for('admin_login', next=request.url))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == ADMIN_PASSWORD:
+            session['admin_logged_in'] = True
+            session.permanent = True
+            next_page = request.args.get('next') or url_for('admin_dashboard')
+            return redirect(next_page)
+        else:
+            flash('Invalid password', 'error')
+    
+    return render_template('admin_login.html')
+
+@app.route('/admin/logout')
+def admin_logout():
+    session.pop('admin_logged_in', None)
+    flash('You have been logged out', 'info')
+    return redirect(url_for('index'))
+
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/admin_dashboard')
+@admin_required
 def admin_dashboard():
     players = Player.query.all()
     current_round = Round.query.filter_by(status='active').first()
@@ -107,6 +140,7 @@ def send_picks():
     return render_template('send_picks.html', players=active_players, round=current_round)
 
 @app.route('/api/players', methods=['GET', 'POST'])
+@admin_required
 def handle_players():
     if request.method == 'GET':
         players = Player.query.all()
@@ -145,6 +179,7 @@ def handle_players():
             return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/players/bulk', methods=['POST'])
+@admin_required
 def bulk_import_players():
     try:
         data = request.get_json()
@@ -207,6 +242,7 @@ def bulk_import_players():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/players/<int:player_id>', methods=['PUT', 'DELETE'])
+@admin_required
 def handle_player_by_id(player_id):
     player = Player.query.get_or_404(player_id)
     
@@ -261,6 +297,7 @@ def handle_player_by_id(player_id):
             return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/rounds', methods=['GET', 'POST'])
+@admin_required
 def handle_rounds():
     if request.method == 'GET':
         rounds = Round.query.all()
@@ -417,6 +454,7 @@ def test_matchdays():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/matchdays')
+@admin_required
 def get_available_matchdays():
     """Get available Premier League matchdays"""
     print("=== Matchdays endpoint called ===")
@@ -479,6 +517,7 @@ def get_available_matchdays():
         return jsonify({'success': False, 'error': f'Matchdays endpoint failed: {str(e)}'}), 500
 
 @app.route('/api/matchdays/<int:matchday>')
+@admin_required
 def get_matchday_info(matchday):
     """Get information about a specific matchday"""
     print(f"=== Getting info for matchday {matchday} ===")
@@ -542,6 +581,7 @@ def get_matchday_info(matchday):
         return jsonify({'success': False, 'error': f'Failed to get matchday info: {str(e)}'}), 500
 
 @app.route('/api/rounds/<int:round_id>')
+@admin_required
 def get_round_by_id(round_id):
     """Get detailed information about a specific round"""
     try:
@@ -564,6 +604,7 @@ def get_round_by_id(round_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/rounds/<int:round_id>/fixtures', methods=['POST'])
+@admin_required
 def add_fixtures_to_round(round_id):
     """Add fixtures to an existing round"""
     try:
@@ -645,7 +686,137 @@ def add_fixtures_to_round(round_id):
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/rounds/<int:round_id>/picks')
+@admin_required
+def get_round_picks(round_id):
+    """Get all picks and fixtures for a round"""
+    try:
+        round_obj = Round.query.get_or_404(round_id)
+        fixtures = Fixture.query.filter_by(round_id=round_id).all()
+        picks = Pick.query.filter_by(round_id=round_id).all()
+        
+        # Format fixtures data
+        fixtures_data = []
+        for fixture in fixtures:
+            fixtures_data.append({
+                'id': fixture.id,
+                'home_team': fixture.home_team,
+                'away_team': fixture.away_team,
+                'home_score': fixture.home_score,
+                'away_score': fixture.away_score,
+                'status': fixture.status,
+                'date': fixture.date.isoformat() if fixture.date else None,
+                'time': fixture.time.isoformat() if fixture.time else None
+            })
+        
+        # Format picks data
+        picks_data = []
+        for pick in picks:
+            picks_data.append({
+                'id': pick.id,
+                'player_name': pick.player.name,
+                'team_picked': pick.team_picked,
+                'is_winner': pick.is_winner,
+                'is_eliminated': pick.is_eliminated
+            })
+        
+        return jsonify({
+            'success': True,
+            'round': {
+                'id': round_obj.id,
+                'round_number': round_obj.round_number,
+                'status': round_obj.status
+            },
+            'fixtures': fixtures_data,
+            'picks': picks_data
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/rounds/<int:round_id>/process-results', methods=['POST'])
+@admin_required  
+def process_round_results(round_id):
+    """Process match results and eliminate players"""
+    try:
+        data = request.get_json()
+        fixture_results = data.get('results', [])
+        
+        if not fixture_results:
+            return jsonify({'success': False, 'error': 'No results provided'}), 400
+        
+        round_obj = Round.query.get_or_404(round_id)
+        eliminated_players = []
+        surviving_players = []
+        
+        # Update fixture results
+        for result in fixture_results:
+            fixture_id = result.get('fixture_id')
+            home_score = result.get('home_score')  
+            away_score = result.get('away_score')
+            
+            if fixture_id and home_score is not None and away_score is not None:
+                fixture = Fixture.query.get(fixture_id)
+                if fixture:
+                    fixture.home_score = int(home_score)
+                    fixture.away_score = int(away_score)
+                    fixture.status = 'completed'
+                    
+                    # Determine winner/draw
+                    if fixture.home_score > fixture.away_score:
+                        winning_team = fixture.home_team
+                    elif fixture.away_score > fixture.home_score:
+                        winning_team = fixture.away_team
+                    else:
+                        winning_team = None  # Draw
+                    
+                    # Find picks for this fixture's teams
+                    home_picks = Pick.query.filter_by(round_id=round_id, team_picked=fixture.home_team).all()
+                    away_picks = Pick.query.filter_by(round_id=round_id, team_picked=fixture.away_team).all()
+                    
+                    # Process home team picks
+                    for pick in home_picks:
+                        if winning_team == fixture.home_team:
+                            pick.is_winner = True
+                            pick.is_eliminated = False
+                            surviving_players.append(pick.player.name)
+                        else:
+                            pick.is_winner = False
+                            pick.is_eliminated = True
+                            pick.player.status = 'eliminated'
+                            eliminated_players.append(pick.player.name)
+                    
+                    # Process away team picks
+                    for pick in away_picks:
+                        if winning_team == fixture.away_team:
+                            pick.is_winner = True
+                            pick.is_eliminated = False
+                            surviving_players.append(pick.player.name)
+                        else:
+                            pick.is_winner = False
+                            pick.is_eliminated = True
+                            pick.player.status = 'eliminated'
+                            eliminated_players.append(pick.player.name)
+        
+        # Mark round as completed
+        round_obj.status = 'completed'
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'eliminated_players': list(set(eliminated_players)),
+            'surviving_players': list(set(surviving_players)),
+            'total_eliminated': len(set(eliminated_players)),
+            'total_surviving': len(set(surviving_players))
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/reset-game', methods=['POST'])
+@admin_required
 def reset_game():
     """Reset the game by deleting all game data except players"""
     try:
