@@ -80,10 +80,18 @@ It's time to make your pick for Round {current_round.round_number} (Premier Leag
 Good luck! 🍀
 
 Click your unique link to submit your pick:
-{pick_url}
-"""
+{pick_url}"""
         
-        player.whatsapp_link = f"https://web.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={urllib.parse.quote(message)}"
+        # Use quote_plus for better WhatsApp compatibility but preserve URL structure
+        encoded_message = urllib.parse.quote_plus(message)
+        # Fix the URL encoding so it remains clickable
+        encoded_message = encoded_message.replace('%3A', ':').replace('%2F', '/').replace('%3F', '?').replace('%3D', '=').replace('%26', '&')
+        
+        player.whatsapp_link = f"https://web.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={encoded_message}"
+        
+        # Debug logging
+        print(f"WhatsApp link for {player.name}: {player.whatsapp_link[:100]}...")
+        print(f"Pick URL in message: {pick_url}")
 
     return render_template('send_picks.html', players=active_players, round=current_round)
 
@@ -434,33 +442,65 @@ def get_available_matchdays():
 @app.route('/api/matchdays/<int:matchday>')
 def get_matchday_info(matchday):
     """Get information about a specific matchday"""
+    print(f"=== Getting info for matchday {matchday} ===")
+    
+    # Validate matchday range
+    if matchday < 1 or matchday > 38:
+        return jsonify({'success': False, 'error': 'Invalid matchday. Must be between 1 and 38'}), 400
+    
     try:
-        from football_api import FootballDataAPI
-        api = FootballDataAPI()
-        
-        # Get fixtures for this specific matchday
-        fixtures_data = api.get_premier_league_fixtures(matchday=matchday)
-        matches = fixtures_data.get('matches', [])
-        
-        dates = []
-        for match in matches:
-            if match.get('utcDate'):
-                try:
-                    dt = datetime.fromisoformat(match['utcDate'].replace('Z', '+00:00'))
-                    dates.append(dt.date())
-                except ValueError:
-                    pass
-        
+        # Start with fallback info
         info = {
             'matchday': matchday,
-            'fixture_count': len(matches),
-            'earliest_date': min(dates) if dates else None,
-            'latest_date': max(dates) if dates else None
+            'fixture_count': 10,  # Typical PL matchday has 10 fixtures
+            'earliest_date': None,
+            'latest_date': None
         }
         
-        return jsonify({'success': True, 'info': info})
+        # Try to get real API data to enhance the info
+        try:
+            from football_api import FootballDataAPI
+            api = FootballDataAPI()
+            print(f"Attempting to get real data for matchday {matchday}")
+            
+            fixtures_data = api.get_premier_league_fixtures(matchday=matchday, season='2025')
+            matches = fixtures_data.get('matches', [])
+            
+            if matches:
+                print(f"Got {len(matches)} matches for matchday {matchday}")
+                
+                # Extract dates
+                dates = []
+                for match in matches:
+                    if match.get('utcDate'):
+                        try:
+                            dt = datetime.fromisoformat(match['utcDate'].replace('Z', '+00:00'))
+                            dates.append(dt.date())
+                        except ValueError:
+                            pass
+                
+                # Update info with real data
+                info = {
+                    'matchday': matchday,
+                    'fixture_count': len(matches),
+                    'earliest_date': min(dates).isoformat() if dates else None,
+                    'latest_date': max(dates).isoformat() if dates else None
+                }
+                print(f"Using real API data: {info}")
+                return jsonify({'success': True, 'info': info, 'source': 'api'})
+            
+        except Exception as api_error:
+            print(f"API failed for matchday {matchday}: {api_error}")
+        
+        # Return fallback info
+        print(f"Using fallback data for matchday {matchday}")
+        return jsonify({'success': True, 'info': info, 'source': 'fallback'})
+        
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        print(f"Critical error getting matchday {matchday} info: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': f'Failed to get matchday info: {str(e)}'}), 500
 
 @app.route('/api/rounds/<int:round_id>')
 def get_round_by_id(round_id):

@@ -645,8 +645,14 @@ document.addEventListener('DOMContentLoaded', function() {
         infoDiv.innerHTML = 'Loading matchday info...';
         
         fetch(`/api/matchdays/${matchday}`)
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return response.json();
+            })
             .then(data => {
+                console.log('Matchday info response:', data);
                 if (data.success && data.info) {
                     const info = data.info;
                     let infoText = `${info.fixture_count} fixtures`;
@@ -659,14 +665,19 @@ document.addEventListener('DOMContentLoaded', function() {
                             infoText += ` from ${startDate} to ${endDate}`;
                         }
                     }
+                    // Add source info for debugging
+                    if (data.source === 'fallback') {
+                        infoText += ' (estimated)';
+                    }
                     infoDiv.innerHTML = infoText;
                 } else {
-                    infoDiv.innerHTML = 'Could not load matchday info';
+                    console.error('Matchday info error:', data.error || 'Unknown error');
+                    infoDiv.innerHTML = `Could not load matchday info${data.error ? ': ' + data.error : ''}`;
                 }
             })
             .catch(error => {
                 console.error('Error fetching matchday info:', error);
-                infoDiv.innerHTML = 'Error loading matchday info';
+                infoDiv.innerHTML = `Error loading matchday info: ${error.message}`;
             });
     });
     
