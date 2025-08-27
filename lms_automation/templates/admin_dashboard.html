@@ -116,6 +116,9 @@
                                         </td>
                                         <td>
                                             <button class="btn btn-sm btn-outline-primary edit-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}" data-player-whatsapp="{{ player.whatsapp_number }}">Edit</button>
+                                            {% if player.whatsapp_number %}
+                                                <button class="btn btn-sm btn-outline-info registration-link-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}" title="Generate registration link for family members">Share Link</button>
+                                            {% endif %}
                                             {% if player.status == 'active' %}
                                                 <button class="btn btn-sm btn-outline-warning eliminate-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}">Eliminate</button>
                                             {% else %}
@@ -191,9 +194,9 @@
                         <input type="text" class="form-control" id="playerName" required>
                     </div>
                     <div class="mb-3">
-                        <label for="playerWhatsapp" class="form-label">WhatsApp Number</label>
-                        <input type="tel" class="form-control" id="playerWhatsapp" placeholder="+44XXXXXXXXXX" required>
-                        <div class="form-text">Include country code (e.g., +44 for UK)</div>
+                        <label for="playerWhatsapp" class="form-label">WhatsApp Number (Optional)</label>
+                        <input type="tel" class="form-control" id="playerWhatsapp" placeholder="+44XXXXXXXXXX">
+                        <div class="form-text">Include country code (e.g., +44 for UK). Leave blank if not available.</div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -263,6 +266,53 @@
                     <button type="submit" class="btn btn-primary">Update Player</button>
                 </div>
             </form>
+        </div>
+    </div>
+</div>
+
+<!-- Registration Link Modal -->
+<div class="modal fade" id="registrationLinkModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Share Registration Link</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="linkPlayerId">
+                <div class="alert alert-info">
+                    <strong id="linkPlayerName"></strong> can share this link with family members who want to join using the same WhatsApp number.
+                </div>
+                
+                <div class="mb-3">
+                    <label for="registrationUrl" class="form-label">Registration Link</label>
+                    <div class="input-group">
+                        <input type="url" class="form-control" id="registrationUrl" readonly>
+                        <button class="btn btn-outline-secondary" type="button" id="copyLinkBtn" title="Copy to clipboard">
+                            📋 Copy
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="alert alert-success d-none" id="copySuccess">
+                    Link copied to clipboard! 📋
+                </div>
+                
+                <div class="card bg-light">
+                    <div class="card-body">
+                        <h6 class="card-title">📱 How to share:</h6>
+                        <ul class="mb-0 small">
+                            <li>Copy the link and send it via WhatsApp, text, or email</li>
+                            <li>Family members will be registered with the same WhatsApp number</li>
+                            <li>They'll receive pick reminders on the shared WhatsApp</li>
+                            <li>Each person still competes individually</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
         </div>
     </div>
 </div>
@@ -634,8 +684,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const name = document.getElementById('playerName').value.trim();
         const whatsapp = document.getElementById('playerWhatsapp').value.trim();
         
-        if (!name || !whatsapp) {
-            alert('Please fill in all fields');
+        if (!name) {
+            alert('Please enter a player name');
             return;
         }
         
@@ -798,6 +848,69 @@ document.addEventListener('DOMContentLoaded', function() {
             
             new bootstrap.Modal(document.getElementById('deletePlayerModal')).show();
         });
+    });
+
+    // Handle registration link buttons
+    document.querySelectorAll('.registration-link-btn').forEach(button => {
+        button.addEventListener('click', async function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            
+            document.getElementById('linkPlayerId').value = playerId;
+            document.getElementById('linkPlayerName').textContent = playerName;
+            
+            // Generate registration link
+            try {
+                const response = await fetch('/api/registration-link', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        player_id: parseInt(playerId)
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('registrationUrl').value = data.registration_url;
+                    new bootstrap.Modal(document.getElementById('registrationLinkModal')).show();
+                } else {
+                    alert('Error generating registration link: ' + data.error);
+                }
+                
+            } catch (error) {
+                alert('Error generating registration link: ' + error.message);
+            }
+        });
+    });
+
+    // Handle copy registration link button
+    document.getElementById('copyLinkBtn').addEventListener('click', async function() {
+        const registrationUrl = document.getElementById('registrationUrl').value;
+        const copySuccess = document.getElementById('copySuccess');
+        
+        try {
+            await navigator.clipboard.writeText(registrationUrl);
+            copySuccess.classList.remove('d-none');
+            setTimeout(() => {
+                copySuccess.classList.add('d-none');
+            }, 3000);
+        } catch (err) {
+            // Fallback for browsers that don't support clipboard API
+            const textArea = document.createElement('textarea');
+            textArea.value = registrationUrl;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            
+            copySuccess.classList.remove('d-none');
+            setTimeout(() => {
+                copySuccess.classList.add('d-none');
+            }, 3000);
+        }
     });
     
     // Handle delete confirmation

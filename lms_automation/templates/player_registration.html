@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Player Registration - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card shadow">
+            <div class="card-header bg-success text-white">
+                <h4 class="mb-0">🏆 Join Last Man Standing!</h4>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <strong>Welcome!</strong><br>
+                    You've been invited to join our Last Man Standing competition. Enter your name below to register.
+                    {% if whatsapp_number %}
+                        <br><br><small>You'll be associated with WhatsApp number: <strong>{{ whatsapp_number }}</strong></small>
+                    {% endif %}
+                </div>
+
+                <div id="errorAlert" class="alert alert-danger d-none"></div>
+                <div id="successAlert" class="alert alert-success d-none"></div>
+
+                <form id="registrationForm">
+                    <div class="mb-3">
+                        <label for="playerName" class="form-label">Your Name <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="playerName" required 
+                               placeholder="Enter your full name">
+                        <div class="form-text">This will be your display name in the competition</div>
+                    </div>
+
+                    {% if whatsapp_number %}
+                        <div class="mb-3">
+                            <label for="whatsappNumber" class="form-label">WhatsApp Number</label>
+                            <input type="tel" class="form-control" id="whatsappNumber" readonly
+                                   value="{{ whatsapp_number }}"
+                                   style="background-color: #f8f9fa;">
+                            <div class="form-text">This number will be used to send you pick reminders</div>
+                        </div>
+                    {% else %}
+                        <div class="mb-3">
+                            <label for="whatsappNumber" class="form-label">WhatsApp Number (Optional)</label>
+                            <input type="tel" class="form-control" id="whatsappNumber" 
+                                   placeholder="+44XXXXXXXXXX">
+                            <div class="form-text">Leave blank if you prefer not to receive WhatsApp reminders</div>
+                        </div>
+                    {% endif %}
+
+                    <div class="mb-4">
+                        <div class="card bg-light">
+                            <div class="card-body">
+                                <h6 class="card-title">📋 How it works:</h6>
+                                <ul class="mb-0 small">
+                                    <li>Pick one team each round that you think will WIN</li>
+                                    <li>You can only pick each team ONCE throughout the competition</li>
+                                    <li>If your team loses or draws, you're eliminated!</li>
+                                    <li>Last player standing wins! 🏆</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="text-center">
+                        <button type="submit" class="btn btn-success btn-lg">
+                            🎯 Register & Join Competition
+                        </button>
+                    </div>
+                </form>
+            </div>
+            <div class="card-footer text-center text-muted">
+                <small>Good luck and may the best predictor win! 🍀</small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('registrationForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const name = document.getElementById('playerName').value.trim();
+    const whatsappElement = document.getElementById('whatsappNumber');
+    const whatsapp = whatsappElement ? whatsappElement.value.trim() : '';
+    
+    const errorAlert = document.getElementById('errorAlert');
+    const successAlert = document.getElementById('successAlert');
+    
+    // Hide previous alerts
+    errorAlert.classList.add('d-none');
+    successAlert.classList.add('d-none');
+    
+    if (!name) {
+        showError('Please enter your name');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/api/register', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: name,
+                whatsapp_number: whatsapp
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showSuccess(data.message + ' You can now close this page.');
+            document.getElementById('registrationForm').style.display = 'none';
+        } else {
+            showError(data.error || 'Registration failed');
+        }
+        
+    } catch (error) {
+        showError('Network error. Please try again.');
+    }
+});
+
+function showError(message) {
+    const errorAlert = document.getElementById('errorAlert');
+    errorAlert.textContent = message;
+    errorAlert.classList.remove('d-none');
+    errorAlert.scrollIntoView({ behavior: 'smooth' });
+}
+
+function showSuccess(message) {
+    const successAlert = document.getElementById('successAlert');
+    successAlert.textContent = message;
+    successAlert.classList.remove('d-none');
+    successAlert.scrollIntoView({ behavior: 'smooth' });
+}
+</script>
+{% endblock %}

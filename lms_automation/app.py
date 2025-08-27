@@ -203,10 +203,15 @@ def send_picks():
         # Just encode line breaks and special characters, preserve the URL completely
         encoded_message = message.replace('\n', '%0A')
         
-        player.whatsapp_link = f"https://web.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={encoded_message}"
+        # Only generate WhatsApp link if player has a WhatsApp number
+        if player.whatsapp_number:
+            player.whatsapp_link = f"https://web.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={encoded_message}"
+            # Debug logging
+            print(f"WhatsApp link for {player.name}: {player.whatsapp_link[:100]}...")
+        else:
+            player.whatsapp_link = None
+            print(f"No WhatsApp number for {player.name}, link generation skipped")
         
-        # Debug logging
-        print(f"WhatsApp link for {player.name}: {player.whatsapp_link[:100]}...")
         print(f"Pick URL in message: {pick_url}")
 
     return render_template('send_picks.html', players=active_players, round=current_round)
@@ -227,18 +232,18 @@ def handle_players():
         try:
             data = request.get_json()
             
-            if not data or not data.get('name') or not data.get('whatsapp_number'):
-                return jsonify({'success': False, 'error': 'Name and WhatsApp number are required'}), 400
+            if not data or not data.get('name'):
+                return jsonify({'success': False, 'error': 'Player name is required'}), 400
             
-            # Check if player already exists
-            existing_player = Player.query.filter_by(whatsapp_number=data['whatsapp_number']).first()
+            # Check if player with same name already exists
+            existing_player = Player.query.filter_by(name=data['name'].strip()).first()
             if existing_player:
-                return jsonify({'success': False, 'error': 'Player with this WhatsApp number already exists'}), 400
+                return jsonify({'success': False, 'error': 'Player with this name already exists'}), 400
             
             # Create new player
             player = Player(
                 name=data['name'].strip(),
-                whatsapp_number=data['whatsapp_number'].strip()
+                whatsapp_number=data.get('whatsapp_number', '').strip() or None
             )
             
             db.session.add(player)
@@ -278,17 +283,13 @@ def bulk_import_players():
                     errors.append(f"Line {i+1}: Player with name '{name}' already exists")
                     continue
                 
-                # If WhatsApp number is provided, check for duplicates
-                if whatsapp:
-                    existing_whatsapp = Player.query.filter_by(whatsapp_number=whatsapp).first()
-                    if existing_whatsapp:
-                        errors.append(f"Line {i+1}: Player with WhatsApp number {whatsapp} already exists")
-                        continue
+                # WhatsApp numbers can be shared among multiple players (family members)
+                # No need to check for WhatsApp duplicates anymore
                 
                 # Create new player
                 player = Player(
                     name=name,
-                    whatsapp_number=whatsapp
+                    whatsapp_number=whatsapp or None
                 )
                 
                 db.session.add(player)
@@ -333,15 +334,12 @@ def handle_player_by_id(player_id):
             if existing_player:
                 return jsonify({'success': False, 'error': 'Player with this name already exists'}), 400
             
-            # Check if another player with the same WhatsApp number exists (if provided)
-            if whatsapp:
-                existing_whatsapp = Player.query.filter(Player.whatsapp_number == whatsapp, Player.id != player_id).first()
-                if existing_whatsapp:
-                    return jsonify({'success': False, 'error': 'Player with this WhatsApp number already exists'}), 400
+            # WhatsApp numbers can be shared among multiple players (family members)
+            # No need to check for WhatsApp duplicates anymore
             
             # Update player
             player.name = name
-            player.whatsapp_number = whatsapp
+            player.whatsapp_number = whatsapp or None
             
             db.session.commit()
             
@@ -1289,6 +1287,93 @@ def make_pick(token):
                          round=round_obj, 
                          fixtures=fixtures, 
                          used_teams=used_teams)
+
+@app.route('/register')
+def player_registration():
+    """Show player registration form for existing players to invite family members"""
+    return render_template('player_registration.html')
+
+@app.route('/register/<whatsapp_number>')
+def register_with_whatsapp(whatsapp_number):
+    """Show registration form pre-filled with WhatsApp number"""
+    # Decode the whatsapp number (in case it's URL encoded)
+    import urllib.parse
+    decoded_number = urllib.parse.unquote(whatsapp_number)
+    return render_template('player_registration.html', whatsapp_number=decoded_number)
+
+@app.route('/api/register', methods=['POST'])
+def api_register_player():
+    """Register a new player via the public registration form"""
+    try:
+        data = request.get_json()
+        
+        if not data or not data.get('name'):
+            return jsonify({'success': False, 'error': 'Player name is required'}), 400
+        
+        name = data['name'].strip()
+        whatsapp = data.get('whatsapp_number', '').strip() or None
+        
+        # Check if player with same name already exists
+        existing_player = Player.query.filter_by(name=name).first()
+        if existing_player:
+            return jsonify({'success': False, 'error': 'Player with this name already exists'}), 400
+        
+        # Create new player
+        player = Player(
+            name=name,
+            whatsapp_number=whatsapp
+        )
+        
+        db.session.add(player)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': f'Welcome {name}! You have been registered successfully.'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/registration-link', methods=['POST'])
+@admin_required
+def generate_registration_link():
+    """Generate a shareable registration link for a player's WhatsApp number"""
+    try:
+        data = request.get_json()
+        player_id = data.get('player_id')
+        
+        if not player_id:
+            return jsonify({'success': False, 'error': 'Player ID is required'}), 400
+        
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'error': 'Player not found'}), 400
+        
+        if not player.whatsapp_number:
+            return jsonify({'success': False, 'error': 'Player does not have a WhatsApp number'}), 400
+        
+        # Get base URL
+        base_url = os.environ.get('BASE_URL')
+        if not base_url:
+            base_url = request.url_root.rstrip('/')
+            if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
+                base_url = base_url.replace('http://', 'https://')
+        
+        if not base_url.startswith(('http://', 'https://')):
+            base_url = f"https://{base_url}"
+        
+        # Create registration link with the WhatsApp number
+        encoded_whatsapp = urllib.parse.quote(player.whatsapp_number, safe='')
+        registration_url = f"{base_url}/register/{encoded_whatsapp}"
+        
+        return jsonify({
+            'success': True, 
+            'registration_url': registration_url,
+            'whatsapp_number': player.whatsapp_number,
+            'player_name': player.name
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

@@ -30,11 +30,15 @@
                                 {% for player in players %}
                                     <tr>
                                         <td>{{ player.name }}</td>
-                                        <td>{{ player.whatsapp_number }}</td>
+                                        <td>{{ player.whatsapp_number or '<em>No number</em>' }}</td>
                                         <td>
-                                            <a href="{{ player.whatsapp_link }}" class="btn btn-sm btn-success" target="_blank">
-                                                Send via WhatsApp
-                                            </a>
+                                            {% if player.whatsapp_link %}
+                                                <a href="{{ player.whatsapp_link }}" class="btn btn-sm btn-success" target="_blank">
+                                                    Send via WhatsApp
+                                                </a>
+                                            {% else %}
+                                                <small class="text-muted">No WhatsApp available</small>
+                                            {% endif %}
                                         </td>
                                     </tr>
                                 {% endfor %}
