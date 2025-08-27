@@ -14,28 +14,151 @@
     </div>
 
     <div class="card">
-        <div class="card-header">
+        <div class="card-header d-flex justify-content-between align-items-center">
             <h5 class="card-title mb-0">All Player Picks by Round</h5>
+            <div class="btn-group" role="group">
+                <button type="button" class="btn btn-outline-primary btn-sm" id="sortByName">
+                    📝 Sort by Name
+                </button>
+                <button type="button" class="btn btn-outline-warning btn-sm" id="sortByStatus">
+                    🎯 Group by Status
+                </button>
+                <button type="button" class="btn btn-outline-info btn-sm" id="adjustColumns">
+                    📊 Adjust Columns
+                </button>
+            </div>
         </div>
         <div class="card-body">
+            <!-- Column width control -->
+            <div class="row mb-3" id="columnControls" style="display: none;">
+                <div class="col-md-6">
+                    <label for="nameColWidth" class="form-label">Name Column Width:</label>
+                    <input type="range" class="form-range" id="nameColWidth" min="100" max="300" value="150" onchange="updateColumnWidth('name', this.value)">
+                    <small class="form-text text-muted">Current: <span id="nameWidthDisplay">150px</span></small>
+                </div>
+                <div class="col-md-6">
+                    <label for="roundColWidth" class="form-label">Round Columns Width:</label>
+                    <input type="range" class="form-range" id="roundColWidth" min="80" max="200" value="120" onchange="updateColumnWidth('round', this.value)">
+                    <small class="form-text text-muted">Current: <span id="roundWidthDisplay">120px</span></small>
+                </div>
+            </div>
+
             <div id="grid-container" class="table-responsive">
                 <p>Loading picks data...</p>
             </div>
         </div>
     </div>
 </div>
+
+<style>
+.picks-table {
+    font-size: 0.875rem;
+}
+
+.picks-table th.name-col {
+    min-width: 150px;
+    width: 150px;
+    position: sticky;
+    left: 0;
+    background-color: #f8f9fa;
+    z-index: 10;
+}
+
+.picks-table td.name-col {
+    min-width: 150px;
+    width: 150px;
+    position: sticky;
+    left: 0;
+    background-color: inherit;
+    font-weight: 600;
+    z-index: 5;
+}
+
+.picks-table th.round-col {
+    min-width: 120px;
+    width: 120px;
+    text-align: center;
+}
+
+.picks-table td.round-col {
+    min-width: 120px;
+    width: 120px;
+    text-align: center;
+    font-size: 0.8rem;
+}
+
+.pick-cell {
+    padding: 4px 8px !important;
+}
+
+.pick-winner {
+    background-color: #d4edda !important;
+    color: #155724;
+    font-weight: bold;
+}
+
+.pick-loser {
+    background-color: #f8d7da !important;
+    color: #721c24;
+    text-decoration: line-through;
+}
+
+.pick-pending {
+    background-color: #fff3cd !important;
+    color: #856404;
+}
+
+.player-eliminated {
+    background-color: #f8d7da;
+}
+
+.player-active {
+    background-color: #d4edda;
+}
+
+.player-winner {
+    background-color: #cce5ff;
+}
+
+.status-badge {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 10px;
+}
+
+.status-active {
+    background-color: #28a745;
+    color: white;
+}
+
+.status-eliminated {
+    background-color: #dc3545;
+    color: white;
+}
+
+.status-winner {
+    background-color: #007bff;
+    color: white;
+}
+</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
+let gridData = null;
+let currentSort = 'name';
+
 document.addEventListener('DOMContentLoaded', function() {
     const gridContainer = document.getElementById('grid-container');
 
+    // Load data
     fetch('/api/picks-grid-data')
         .then(response => response.json())
         .then(data => {
             if (data.success) {
+                gridData = data;
                 renderGrid(data);
+                setupEventListeners();
             } else {
                 gridContainer.innerHTML = `<div class="alert alert-danger">Error loading data: ${data.error}</div>`;
             }
@@ -45,41 +168,73 @@ document.addEventListener('DOMContentLoaded', function() {
             gridContainer.innerHTML = '<div class="alert alert-danger">Could not fetch data from the server.</div>';
         });
 
-    function renderGrid(data) {
+    function renderGrid(data, sortBy = 'name') {
         const rounds = data.rounds;
-        const players = data.players;
+        let players = [...data.players]; // Create a copy
 
         if (players.length === 0) {
             gridContainer.innerHTML = '<p class="text-muted">No players found.</p>';
             return;
         }
 
-        let tableHtml = '<table class="table table-striped table-bordered table-sm">';
+        // Sort players
+        if (sortBy === 'name') {
+            players.sort((a, b) => a.name.localeCompare(b.name));
+        } else if (sortBy === 'status') {
+            // Group by status: active first, then eliminated, then winner
+            players.sort((a, b) => {
+                const statusOrder = { 'active': 1, 'eliminated': 2, 'winner': 3 };
+                const aOrder = statusOrder[a.status] || 4;
+                const bOrder = statusOrder[b.status] || 4;
+                if (aOrder !== bOrder) return aOrder - bOrder;
+                return a.name.localeCompare(b.name); // Secondary sort by name
+            });
+        }
+
+        let tableHtml = '<table class="table table-bordered table-sm picks-table">';
         
         // --- Render Header ---
-        tableHtml += '<thead><tr><th>Player</th>';
+        tableHtml += '<thead class="table-dark"><tr>';
+        tableHtml += '<th class="name-col">Player</th>';
         rounds.forEach(roundNumber => {
-            tableHtml += `<th>Round ${roundNumber}</th>`;
+            tableHtml += `<th class="round-col">R${roundNumber}</th>`;
         });
+        tableHtml += '<th class="round-col">Status</th>';
         tableHtml += '</tr></thead>';
 
         // --- Render Body ---
         tableHtml += '<tbody>';
-        players.forEach(player => {
-            let statusClass = '';
-            if (player.status === 'eliminated') {
-                statusClass = 'table-danger';
-            } else if (player.status === 'winner') {
-                statusClass = 'table-success';
+        
+        let currentGroup = '';
+        players.forEach((player, index) => {
+            // Add group separator for status sorting
+            if (sortBy === 'status' && currentGroup !== player.status) {
+                currentGroup = player.status;
+                const groupName = player.status.charAt(0).toUpperCase() + player.status.slice(1);
+                const badgeClass = `status-${player.status}`;
+                tableHtml += `<tr class="table-secondary"><td colspan="${rounds.length + 2}" class="text-center">
+                    <strong><span class="status-badge ${badgeClass}">${groupName} Players</span></strong>
+                </td></tr>`;
             }
 
-            tableHtml += `<tr class="${statusClass}">`;
-            tableHtml += `<td><strong>${player.name}</strong></td>`;
+            let rowClass = `player-${player.status}`;
             
+            tableHtml += `<tr class="${rowClass}">`;
+            
+            // Player name column (sticky)
+            tableHtml += `<td class="name-col"><strong>${player.name}</strong></td>`;
+            
+            // Round columns
             rounds.forEach(roundNumber => {
-                const pick = player.picks[roundNumber] || '-';
-                tableHtml += `<td>${pick}</td>`;
+                const pickData = player.picks[roundNumber];
+                const pickInfo = getPickInfo(pickData, roundNumber);
+                const cellClass = `round-col pick-cell ${pickInfo.class}`;
+                tableHtml += `<td class="${cellClass}" title="${pickInfo.tooltip}">${pickInfo.display}</td>`;
             });
+
+            // Status column
+            const statusBadge = `<span class="status-badge status-${player.status}">${player.status.toUpperCase()}</span>`;
+            tableHtml += `<td class="round-col">${statusBadge}</td>`;
 
             tableHtml += '</tr>';
         });
@@ -88,6 +243,90 @@ document.addEventListener('DOMContentLoaded', function() {
         tableHtml += '</table>';
         gridContainer.innerHTML = tableHtml;
     }
+
+    function getPickInfo(pickData, roundNumber) {
+        if (!pickData || pickData === null) {
+            return {
+                display: '-',
+                class: 'pick-pending',
+                tooltip: 'No pick made'
+            };
+        }
+
+        const team = pickData.team;
+        const isWinner = pickData.is_winner;
+        
+        let displayClass = 'pick-pending';
+        let statusText = '? Pending';
+        
+        if (isWinner === true) {
+            displayClass = 'pick-winner';
+            statusText = '✓ Won';
+        } else if (isWinner === false) {
+            displayClass = 'pick-loser';
+            statusText = '✗ Lost';
+        }
+        
+        return {
+            display: team,
+            class: displayClass,
+            tooltip: `Round ${roundNumber}: ${team} ${statusText}`
+        };
+    }
+
+
+    function setupEventListeners() {
+        // Sort by name
+        document.getElementById('sortByName').addEventListener('click', function() {
+            currentSort = 'name';
+            renderGrid(gridData, 'name');
+            updateSortButtons('sortByName');
+        });
+
+        // Sort by status
+        document.getElementById('sortByStatus').addEventListener('click', function() {
+            currentSort = 'status';
+            renderGrid(gridData, 'status');
+            updateSortButtons('sortByStatus');
+        });
+
+        // Toggle column controls
+        document.getElementById('adjustColumns').addEventListener('click', function() {
+            const controls = document.getElementById('columnControls');
+            controls.style.display = controls.style.display === 'none' ? 'block' : 'none';
+        });
+    }
+
+    function updateSortButtons(activeButton) {
+        ['sortByName', 'sortByStatus'].forEach(id => {
+            const btn = document.getElementById(id);
+            if (id === activeButton) {
+                btn.classList.remove('btn-outline-primary', 'btn-outline-warning');
+                btn.classList.add(id === 'sortByName' ? 'btn-primary' : 'btn-warning');
+            } else {
+                btn.classList.remove('btn-primary', 'btn-warning');
+                btn.classList.add(id === 'sortByName' ? 'btn-outline-primary' : 'btn-outline-warning');
+            }
+        });
+    }
 });
+
+// Column width adjustment functions
+function updateColumnWidth(type, value) {
+    const displayElement = document.getElementById(`${type}WidthDisplay`);
+    displayElement.textContent = value + 'px';
+    
+    if (type === 'name') {
+        document.querySelectorAll('.name-col').forEach(col => {
+            col.style.minWidth = value + 'px';
+            col.style.width = value + 'px';
+        });
+    } else if (type === 'round') {
+        document.querySelectorAll('.round-col').forEach(col => {
+            col.style.minWidth = value + 'px';
+            col.style.width = value + 'px';
+        });
+    }
+}
 </script>
 {% endblock %}

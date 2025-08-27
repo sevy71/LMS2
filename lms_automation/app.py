@@ -112,16 +112,35 @@ def get_picks_grid_data():
         players = Player.query.order_by(Player.name).all()
         picks = Pick.query.all()
 
-        # Create a mapping of (player_id, round_id) -> team_picked
-        picks_map = {(p.player_id, p.round_id): p.team_picked for p in picks}
+        # Create mappings
+        picks_map = {}
+        results_map = {}
+        
+        for pick in picks:
+            key = (pick.player_id, pick.round_id)
+            picks_map[key] = pick.team_picked
+            results_map[key] = {
+                'is_winner': pick.is_winner,
+                'is_eliminated': pick.is_eliminated
+            }
 
         # Prepare player data
         players_data = []
         for player in players:
             player_picks = {}
+            
             for r in rounds:
-                team = picks_map.get((player.id, r.id), '-') # Default to '-' if no pick
-                player_picks[r.round_number] = team
+                key = (player.id, r.id)
+                if key in picks_map:
+                    team = picks_map[key]
+                    result = results_map[key]
+                    player_picks[r.round_number] = {
+                        'team': team,
+                        'is_winner': result['is_winner'],
+                        'is_eliminated': result['is_eliminated']
+                    }
+                else:
+                    player_picks[r.round_number] = None
             
             players_data.append({
                 'name': player.name,
@@ -177,6 +196,9 @@ def send_picks():
         # Debug logging
         print(f"Generated pick URL for {player.name}: {pick_url}")
         
+        # Generate general registration link
+        registration_url = f"{base_url}/register"
+        
         # Format message with better mobile WhatsApp compatibility
         message_lines = [
             f"🏆 Last Man Standing - Round {current_round.round_number}",
@@ -194,7 +216,11 @@ def send_picks():
             "Good luck! 🍀",
             "",
             "Your pick link:",
-            pick_url
+            pick_url,
+            "",
+            "👥 Want to invite friends/family?",
+            "Share this registration link:",
+            registration_url
         ]
         
         message = "\n".join(message_lines)
@@ -1370,6 +1396,33 @@ def generate_registration_link():
             'registration_url': registration_url,
             'whatsapp_number': player.whatsapp_number,
             'player_name': player.name
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/general-registration-link', methods=['POST'])
+@admin_required
+def generate_general_registration_link():
+    """Generate a general registration link for anyone to join"""
+    try:
+        # Get base URL
+        base_url = os.environ.get('BASE_URL')
+        if not base_url:
+            base_url = request.url_root.rstrip('/')
+            if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
+                base_url = base_url.replace('http://', 'https://')
+        
+        if not base_url.startswith(('http://', 'https://')):
+            base_url = f"https://{base_url}"
+        
+        # Create general registration link
+        registration_url = f"{base_url}/register"
+        
+        return jsonify({
+            'success': True, 
+            'registration_url': registration_url,
+            'link_type': 'general'
         })
         
     except Exception as e:

@@ -86,7 +86,11 @@
                             <thead>
                                 <tr>
                                     <th>ID</th>
-                                    <th>Name</th>
+                                    <th>
+                                        <button type="button" class="btn btn-link p-0 text-dark fw-bold" id="sortNameBtn" onclick="sortPlayersByName()">
+                                            Name <span id="nameSortIcon">↕️</span>
+                                        </button>
+                                    </th>
                                     <th>WhatsApp Number</th>
                                     <th>Status</th>
                                     <th>Unreachable</th>
@@ -169,6 +173,9 @@
                 <div class="row mt-2">
                     <div class="col-md-3 mb-2">
                         <button class="btn btn-primary w-100" data-bs-toggle="modal" data-bs-target="#exportModal">💾 Export/Backup</button>
+                    </div>
+                    <div class="col-md-3 mb-2">
+                        <button class="btn btn-outline-success w-100" id="generateGeneralLinkBtn">🔗 General Registration Link</button>
                     </div>
                     <div class="col-md-3 mb-2">
                         <button class="btn btn-danger w-100" data-bs-toggle="modal" data-bs-target="#resetGameModal">Reset Game</button>
@@ -266,6 +273,53 @@
                     <button type="submit" class="btn btn-primary">Update Player</button>
                 </div>
             </form>
+        </div>
+    </div>
+</div>
+
+<!-- General Registration Link Modal -->
+<div class="modal fade" id="generalRegistrationLinkModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">General Registration Link</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info">
+                    <strong>Share this link with anyone!</strong><br>
+                    This general registration link allows anyone to join the Last Man Standing competition.
+                </div>
+                
+                <div class="mb-3">
+                    <label for="generalRegistrationUrl" class="form-label">General Registration Link</label>
+                    <div class="input-group">
+                        <input type="url" class="form-control" id="generalRegistrationUrl" readonly>
+                        <button class="btn btn-outline-secondary" type="button" id="copyGeneralLinkBtn" title="Copy to clipboard">
+                            📋 Copy
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="alert alert-success d-none" id="copyGeneralSuccess">
+                    Link copied to clipboard! 📋
+                </div>
+                
+                <div class="card bg-light">
+                    <div class="card-body">
+                        <h6 class="card-title">📱 How to share:</h6>
+                        <ul class="mb-0 small">
+                            <li>Copy the link and share via WhatsApp, text, email, or social media</li>
+                            <li>Anyone can register with their own details</li>
+                            <li>New players can optionally provide their WhatsApp number</li>
+                            <li>Perfect for inviting friends, colleagues, or posting in groups</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
         </div>
     </div>
 </div>
@@ -884,6 +938,57 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Error generating registration link: ' + error.message);
             }
         });
+    });
+
+    // Handle general registration link button
+    document.getElementById('generateGeneralLinkBtn').addEventListener('click', async function() {
+        try {
+            const response = await fetch('/api/general-registration-link', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                document.getElementById('generalRegistrationUrl').value = data.registration_url;
+                new bootstrap.Modal(document.getElementById('generalRegistrationLinkModal')).show();
+            } else {
+                alert('Error generating general registration link: ' + data.error);
+            }
+            
+        } catch (error) {
+            alert('Error generating general registration link: ' + error.message);
+        }
+    });
+
+    // Handle copy general registration link button
+    document.getElementById('copyGeneralLinkBtn').addEventListener('click', async function() {
+        const registrationUrl = document.getElementById('generalRegistrationUrl').value;
+        const copySuccess = document.getElementById('copyGeneralSuccess');
+        
+        try {
+            await navigator.clipboard.writeText(registrationUrl);
+            copySuccess.classList.remove('d-none');
+            setTimeout(() => {
+                copySuccess.classList.add('d-none');
+            }, 3000);
+        } catch (err) {
+            // Fallback for browsers that don't support clipboard API
+            const textArea = document.createElement('textarea');
+            textArea.value = registrationUrl;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            
+            copySuccess.classList.remove('d-none');
+            setTimeout(() => {
+                copySuccess.classList.add('d-none');
+            }, 3000);
+        }
     });
 
     // Handle copy registration link button
@@ -1773,5 +1878,142 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('processResultsBtn').disabled = true;
     });
 });
+
+// Player sorting functionality
+let currentNameSort = 'none'; // 'none', 'asc', 'desc'
+
+function sortPlayersByName() {
+    const playersTable = document.querySelector('.table tbody');
+    const rows = Array.from(playersTable.querySelectorAll('tr'));
+    const sortIcon = document.getElementById('nameSortIcon');
+    
+    // Determine next sort direction
+    if (currentNameSort === 'none' || currentNameSort === 'desc') {
+        currentNameSort = 'asc';
+        sortIcon.textContent = '↑';
+    } else {
+        currentNameSort = 'desc';
+        sortIcon.textContent = '↓';
+    }
+    
+    // Sort rows by name (2nd column, index 1)
+    rows.sort((a, b) => {
+        const nameA = a.cells[1].textContent.trim().toLowerCase();
+        const nameB = b.cells[1].textContent.trim().toLowerCase();
+        
+        if (currentNameSort === 'asc') {
+            return nameA.localeCompare(nameB);
+        } else {
+            return nameB.localeCompare(nameA);
+        }
+    });
+    
+    // Clear and re-append sorted rows
+    playersTable.innerHTML = '';
+    rows.forEach(row => playersTable.appendChild(row));
+    
+    // Re-attach event listeners to the sorted rows
+    attachPlayerEventListeners();
+}
+
+function attachPlayerEventListeners() {
+    // Re-attach edit player button listeners
+    document.querySelectorAll('.edit-player-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            const playerWhatsapp = this.getAttribute('data-player-whatsapp');
+            
+            document.getElementById('editPlayerId').value = playerId;
+            document.getElementById('editPlayerName').value = playerName;
+            document.getElementById('editPlayerWhatsapp').value = playerWhatsapp || '';
+            
+            new bootstrap.Modal(document.getElementById('editPlayerModal')).show();
+        });
+    });
+
+    // Re-attach registration link buttons
+    document.querySelectorAll('.registration-link-btn').forEach(button => {
+        button.addEventListener('click', async function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            
+            document.getElementById('linkPlayerId').value = playerId;
+            document.getElementById('linkPlayerName').textContent = playerName;
+            
+            // Generate registration link
+            try {
+                const response = await fetch('/api/registration-link', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        player_id: parseInt(playerId)
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('registrationUrl').value = data.registration_url;
+                    new bootstrap.Modal(document.getElementById('registrationLinkModal')).show();
+                } else {
+                    alert('Error generating registration link: ' + data.error);
+                }
+                
+            } catch (error) {
+                alert('Error generating registration link: ' + error.message);
+            }
+        });
+    });
+
+    // Re-attach eliminate/reactivate buttons
+    document.querySelectorAll('.eliminate-player-btn, .reactivate-player-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            const isEliminate = this.classList.contains('eliminate-player-btn');
+            const newStatus = isEliminate ? 'eliminated' : 'active';
+            const action = isEliminate ? 'eliminate' : 'reactivate';
+            
+            if (confirm(`Are you sure you want to ${action} ${playerName}?`)) {
+                fetch(`/api/players/${playerId}/status`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        status: newStatus
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload();
+                    } else {
+                        alert('Error updating player status: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    alert('Error updating player status: ' + error.message);
+                });
+            }
+        });
+    });
+
+    // Re-attach delete buttons
+    document.querySelectorAll('.delete-player-btn').forEach(button => {
+        button.addEventListener('click', function() {
+            const playerId = this.getAttribute('data-player-id');
+            const playerName = this.getAttribute('data-player-name');
+            
+            document.getElementById('deletePlayerId').value = playerId;
+            document.getElementById('deletePlayerName').textContent = playerName;
+            
+            new bootstrap.Modal(document.getElementById('deletePlayerModal')).show();
+        });
+    });
+}
 </script>
 {% endblock %}
