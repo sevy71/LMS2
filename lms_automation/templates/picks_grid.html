@@ -23,6 +23,9 @@
                 <button type="button" class="btn btn-outline-warning btn-sm" id="sortByStatus">
                     🎯 Group by Status
                 </button>
+                <button type="button" class="btn btn-outline-success btn-sm" id="sortByLatestRound">
+                    🎲 Sort by Latest Round
+                </button>
                 <button type="button" class="btn btn-outline-info btn-sm" id="adjustColumns">
                     📊 Adjust Columns
                 </button>
@@ -189,6 +192,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (aOrder !== bOrder) return aOrder - bOrder;
                 return a.name.localeCompare(b.name); // Secondary sort by name
             });
+        } else if (sortBy === 'latestRound') {
+            // Sort by latest round pick in ascending order
+            const latestRound = Math.max(...rounds);
+            players.sort((a, b) => {
+                const aLatestPick = a.picks[latestRound];
+                const bLatestPick = b.picks[latestRound];
+                
+                // Players without picks go to the end
+                if (!aLatestPick && !bLatestPick) return a.name.localeCompare(b.name);
+                if (!aLatestPick) return 1;
+                if (!bLatestPick) return -1;
+                
+                // Sort by team name in ascending order
+                const teamCompare = aLatestPick.team.localeCompare(bLatestPick.team);
+                if (teamCompare !== 0) return teamCompare;
+                
+                // Secondary sort by name if same team
+                return a.name.localeCompare(b.name);
+            });
         }
 
         let tableHtml = '<table class="table table-bordered table-sm picks-table">';
@@ -290,6 +312,13 @@ document.addEventListener('DOMContentLoaded', function() {
             updateSortButtons('sortByStatus');
         });
 
+        // Sort by latest round
+        document.getElementById('sortByLatestRound').addEventListener('click', function() {
+            currentSort = 'latestRound';
+            renderGrid(gridData, 'latestRound');
+            updateSortButtons('sortByLatestRound');
+        });
+
         // Toggle column controls
         document.getElementById('adjustColumns').addEventListener('click', function() {
             const controls = document.getElementById('columnControls');
@@ -298,14 +327,26 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateSortButtons(activeButton) {
-        ['sortByName', 'sortByStatus'].forEach(id => {
+        ['sortByName', 'sortByStatus', 'sortByLatestRound'].forEach(id => {
             const btn = document.getElementById(id);
             if (id === activeButton) {
-                btn.classList.remove('btn-outline-primary', 'btn-outline-warning');
-                btn.classList.add(id === 'sortByName' ? 'btn-primary' : 'btn-warning');
+                btn.classList.remove('btn-outline-primary', 'btn-outline-warning', 'btn-outline-success');
+                if (id === 'sortByName') {
+                    btn.classList.add('btn-primary');
+                } else if (id === 'sortByStatus') {
+                    btn.classList.add('btn-warning');
+                } else if (id === 'sortByLatestRound') {
+                    btn.classList.add('btn-success');
+                }
             } else {
-                btn.classList.remove('btn-primary', 'btn-warning');
-                btn.classList.add(id === 'sortByName' ? 'btn-outline-primary' : 'btn-outline-warning');
+                btn.classList.remove('btn-primary', 'btn-warning', 'btn-success');
+                if (id === 'sortByName') {
+                    btn.classList.add('btn-outline-primary');
+                } else if (id === 'sortByStatus') {
+                    btn.classList.add('btn-outline-warning');
+                } else if (id === 'sortByLatestRound') {
+                    btn.classList.add('btn-outline-success');
+                }
             }
         });
     }
