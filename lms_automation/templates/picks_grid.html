@@ -46,7 +46,7 @@
                 </div>
             </div>
 
-            <div id="grid-container" class="table-responsive">
+            <div id="grid-container" class="spreadsheet-container">
                 <p>Loading picks data...</p>
             </div>
         </div>
@@ -54,46 +54,138 @@
 </div>
 
 <style>
-.picks-table {
+/* Spreadsheet Container */
+.spreadsheet-container {
+    height: 70vh;
+    max-height: 800px;
+    border: 2px solid #dee2e6;
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    background: white;
+}
+
+/* Main Grid */
+.spreadsheet-grid {
+    display: grid;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* Frozen Corner (top-left) */
+.grid-corner {
+    position: sticky;
+    top: 0;
+    left: 0;
+    z-index: 30;
+    background: #e9ecef;
+    border-right: 2px solid #adb5bd;
+    border-bottom: 2px solid #adb5bd;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
     font-size: 0.875rem;
 }
 
-.picks-table th.name-col {
-    min-width: 150px;
-    width: 150px;
+/* Frozen Headers (top row) */
+.grid-headers {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: #e9ecef;
+    border-bottom: 2px solid #adb5bd;
+    display: grid;
+    grid-auto-columns: 120px;
+    grid-auto-flow: column;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.grid-headers::-webkit-scrollbar {
+    display: none;
+}
+
+.header-cell {
+    padding: 12px 8px;
+    border-right: 1px solid #adb5bd;
+    background: #e9ecef;
+    font-weight: bold;
+    text-align: center;
+    font-size: 0.875rem;
+    position: relative;
+    cursor: col-resize;
+}
+
+.header-cell:hover {
+    background: #d6d9dc;
+}
+
+/* Frozen Name Column */
+.grid-names {
     position: sticky;
     left: 0;
-    background-color: #f8f9fa;
     z-index: 10;
+    background: white;
+    border-right: 2px solid #adb5bd;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
 }
 
-.picks-table td.name-col {
-    min-width: 150px;
-    width: 150px;
-    position: sticky;
-    left: 0;
-    background-color: inherit;
+.grid-names::-webkit-scrollbar {
+    display: none;
+}
+
+.name-cell {
+    padding: 10px 12px;
+    border-bottom: 1px solid #dee2e6;
+    background: white;
     font-weight: 600;
-    z-index: 5;
+    font-size: 0.875rem;
+    min-height: 45px;
+    display: flex;
+    align-items: center;
+    position: relative;
 }
 
-.picks-table th.round-col {
-    min-width: 120px;
-    width: 120px;
+/* Data Grid */
+.grid-data {
+    overflow: auto;
+    background: white;
+}
+
+.data-row {
+    display: grid;
+    grid-auto-columns: 120px;
+    grid-auto-flow: column;
+    border-bottom: 1px solid #dee2e6;
+    min-height: 45px;
+}
+
+.data-cell {
+    padding: 10px 8px;
+    border-right: 1px solid #dee2e6;
     text-align: center;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    background: white;
 }
 
-.picks-table td.round-col {
-    min-width: 120px;
-    width: 120px;
-    text-align: center;
-    font-size: 0.8rem;
+/* Alternating row colors */
+.data-row:nth-child(even) .data-cell {
+    background-color: #f8f9fa;
 }
 
-.pick-cell {
-    padding: 4px 8px !important;
+.name-cell:nth-child(even) {
+    background-color: #f8f9fa;
 }
 
+/* Pick status styles */
 .pick-winner {
     background-color: #d4edda !important;
     color: #155724;
@@ -111,22 +203,25 @@
     color: #856404;
 }
 
-.player-eliminated {
-    background-color: #f8d7da;
+/* Player status row indicators */
+.name-cell.player-eliminated {
+    border-left: 4px solid #dc3545;
 }
 
-.player-active {
-    background-color: #d4edda;
+.name-cell.player-active {
+    border-left: 4px solid #28a745;
 }
 
-.player-winner {
-    background-color: #cce5ff;
+.name-cell.player-winner {
+    border-left: 4px solid #007bff;
 }
 
+/* Status badges */
 .status-badge {
     font-size: 0.7rem;
-    padding: 2px 6px;
-    border-radius: 10px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: bold;
 }
 
 .status-active {
@@ -142,6 +237,52 @@
 .status-winner {
     background-color: #007bff;
     color: white;
+}
+
+/* Group headers for status sorting */
+.group-header {
+    grid-column: 1 / -1;
+    padding: 8px 16px;
+    background: #6c757d;
+    color: white;
+    font-weight: bold;
+    text-align: center;
+    font-size: 0.875rem;
+}
+
+/* Scrollbar styling */
+.grid-data::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+.grid-data::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+.grid-data::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 6px;
+}
+
+.grid-data::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .spreadsheet-container {
+        height: 60vh;
+    }
+    
+    .grid-corner {
+        width: 120px;
+    }
+    
+    .header-cell,
+    .data-cell {
+        min-width: 100px;
+    }
 }
 </style>
 {% endblock %}
@@ -213,20 +354,22 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
-        let tableHtml = '<table class="table table-bordered table-sm picks-table">';
+        // Create spreadsheet grid structure
+        let gridHtml = '<div class="spreadsheet-grid" style="grid-template-columns: 180px 1fr;">';
         
-        // --- Render Header ---
-        tableHtml += '<thead class="table-dark"><tr>';
-        tableHtml += '<th class="name-col">Player</th>';
+        // Top-left corner
+        gridHtml += '<div class="grid-corner">Player</div>';
+        
+        // Headers
+        gridHtml += '<div class="grid-headers">';
         rounds.forEach(roundNumber => {
-            tableHtml += `<th class="round-col">R${roundNumber}</th>`;
+            gridHtml += `<div class="header-cell" data-round="${roundNumber}">R${roundNumber}</div>`;
         });
-        tableHtml += '<th class="round-col">Status</th>';
-        tableHtml += '</tr></thead>';
-
-        // --- Render Body ---
-        tableHtml += '<tbody>';
+        gridHtml += '<div class="header-cell">Status</div>';
+        gridHtml += '</div>';
         
+        // Name column
+        gridHtml += '<div class="grid-names">';
         let currentGroup = '';
         players.forEach((player, index) => {
             // Add group separator for status sorting
@@ -234,36 +377,71 @@ document.addEventListener('DOMContentLoaded', function() {
                 currentGroup = player.status;
                 const groupName = player.status.charAt(0).toUpperCase() + player.status.slice(1);
                 const badgeClass = `status-${player.status}`;
-                tableHtml += `<tr class="table-secondary"><td colspan="${rounds.length + 2}" class="text-center">
-                    <strong><span class="status-badge ${badgeClass}">${groupName} Players</span></strong>
-                </td></tr>`;
+                gridHtml += `<div class="name-cell group-header">
+                    <span class="status-badge ${badgeClass}">${groupName} Players</span>
+                </div>`;
             }
-
-            let rowClass = `player-${player.status}`;
             
-            tableHtml += `<tr class="${rowClass}">`;
+            const statusClass = `player-${player.status}`;
+            gridHtml += `<div class="name-cell ${statusClass}">${player.name}</div>`;
+        });
+        gridHtml += '</div>';
+        
+        // Data grid
+        gridHtml += '<div class="grid-data" id="dataGrid">';
+        currentGroup = '';
+        players.forEach((player, index) => {
+            // Add group separator for status sorting
+            if (sortBy === 'status' && currentGroup !== player.status) {
+                currentGroup = player.status;
+                gridHtml += '<div class="data-row"><div class="group-header"></div></div>';
+            }
             
-            // Player name column (sticky)
-            tableHtml += `<td class="name-col"><strong>${player.name}</strong></td>`;
+            gridHtml += '<div class="data-row">';
             
             // Round columns
             rounds.forEach(roundNumber => {
                 const pickData = player.picks[roundNumber];
                 const pickInfo = getPickInfo(pickData, roundNumber);
-                const cellClass = `round-col pick-cell ${pickInfo.class}`;
-                tableHtml += `<td class="${cellClass}" title="${pickInfo.tooltip}">${pickInfo.display}</td>`;
+                gridHtml += `<div class="data-cell ${pickInfo.class}" title="${pickInfo.tooltip}">${pickInfo.display}</div>`;
             });
 
             // Status column
             const statusBadge = `<span class="status-badge status-${player.status}">${player.status.toUpperCase()}</span>`;
-            tableHtml += `<td class="round-col">${statusBadge}</td>`;
+            gridHtml += `<div class="data-cell">${statusBadge}</div>`;
 
-            tableHtml += '</tr>';
+            gridHtml += '</div>';
         });
-        tableHtml += '</tbody>';
+        gridHtml += '</div>';
+        
+        gridHtml += '</div>';
+        gridContainer.innerHTML = gridHtml;
+        
+        // Sync scrolling between headers and data
+        syncScrolling();
+    }
 
-        tableHtml += '</table>';
-        gridContainer.innerHTML = tableHtml;
+    function syncScrolling() {
+        const headers = document.querySelector('.grid-headers');
+        const dataGrid = document.querySelector('.grid-data');
+        const names = document.querySelector('.grid-names');
+        
+        if (!headers || !dataGrid || !names) return;
+        
+        // Sync horizontal scrolling between headers and data
+        dataGrid.addEventListener('scroll', function() {
+            headers.scrollLeft = dataGrid.scrollLeft;
+        });
+        
+        // Sync vertical scrolling between names and data
+        dataGrid.addEventListener('scroll', function() {
+            names.scrollTop = dataGrid.scrollTop;
+        });
+        
+        // Also sync when scrolling the names column
+        names.addEventListener('scroll', function() {
+            dataGrid.scrollTop = names.scrollTop;
+        });
     }
 
     function getPickInfo(pickData, roundNumber) {
@@ -358,14 +536,25 @@ function updateColumnWidth(type, value) {
     displayElement.textContent = value + 'px';
     
     if (type === 'name') {
-        document.querySelectorAll('.name-col').forEach(col => {
-            col.style.minWidth = value + 'px';
-            col.style.width = value + 'px';
+        // Update name column width
+        const grid = document.querySelector('.spreadsheet-grid');
+        if (grid) {
+            grid.style.gridTemplateColumns = `${value}px 1fr`;
+        }
+        document.querySelectorAll('.name-cell').forEach(cell => {
+            cell.style.width = value + 'px';
         });
     } else if (type === 'round') {
-        document.querySelectorAll('.round-col').forEach(col => {
-            col.style.minWidth = value + 'px';
-            col.style.width = value + 'px';
+        // Update round column widths
+        const headers = document.querySelector('.grid-headers');
+        const dataRows = document.querySelectorAll('.data-row');
+        
+        if (headers) {
+            headers.style.gridAutoColumns = value + 'px';
+        }
+        
+        dataRows.forEach(row => {
+            row.style.gridAutoColumns = value + 'px';
         });
     }
 }
