@@ -7,7 +7,12 @@
     <div class="col-12 col-lg-8">
         <div class="card shadow">
             <div class="card-header bg-primary text-white">
-                <h4 class="mb-0">Make Your Pick - Round {{ round.round_number }}</h4>
+                <div class="d-flex justify-content-between align-items-center">
+                    <h4 class="mb-0">Make Your Pick - Round {{ round.round_number }}</h4>
+                    <a href="{{ url_for('player_dashboard', token=token) }}" class="btn btn-outline-light btn-sm">
+                        <i class="fas fa-tachometer-alt me-1"></i> Dashboard
+                    </a>
+                </div>
             </div>
             <div class="card-body">
                 {% if existing_pick %}

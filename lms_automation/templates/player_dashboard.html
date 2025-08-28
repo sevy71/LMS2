@@ -1,0 +1,470 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - {{ player.name }} - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1 class="h2">Welcome, {{ player.name }}!</h1>
+                <div class="d-flex gap-2">
+                    {% if current_round %}
+                        <a href="{{ url_for('make_pick', token=token) }}" class="btn btn-primary">
+                            <i class="fas fa-edit"></i> Make Pick - Round {{ current_round.round_number }}
+                        </a>
+                    {% endif %}
+                    <button class="btn btn-outline-secondary" onclick="refreshDashboard()">
+                        <i class="fas fa-sync"></i> Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Player Status Card -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <div class="row text-center">
+                        <div class="col-6 col-md-3">
+                            <h5 class="mb-1" id="playerStatus">{{ player.status|title }}</h5>
+                            <small class="text-muted">Status</small>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <h5 class="mb-1" id="roundsSurvived">-</h5>
+                            <small class="text-muted">Rounds Survived</small>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <h5 class="mb-1" id="totalWins">-</h5>
+                            <small class="text-muted">Total Wins</small>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <h5 class="mb-1" id="usedTeams">-</h5>
+                            <small class="text-muted">Teams Used</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="row">
+        <div class="col-12">
+            <ul class="nav nav-tabs" id="dashboardTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="league-tab" data-bs-toggle="tab" data-bs-target="#league" type="button" role="tab">
+                        <i class="fas fa-trophy"></i> League Table
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="history-tab" data-bs-toggle="tab" data-bs-target="#history" type="button" role="tab">
+                        <i class="fas fa-history"></i> My Pick History
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="fixtures-tab" data-bs-toggle="tab" data-bs-target="#fixtures" type="button" role="tab">
+                        <i class="fas fa-calendar"></i> Upcoming Fixtures
+                    </button>
+                </li>
+            </ul>
+
+            <!-- Tab Content -->
+            <div class="tab-content" id="dashboardTabContent">
+                <!-- League Table Tab -->
+                <div class="tab-pane fade show active" id="league" role="tabpanel">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title mb-0">League Table</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="leagueTableContainer">
+                                <div class="text-center">
+                                    <div class="spinner-border" role="status"></div>
+                                    <p class="mt-2">Loading league table...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pick History Tab -->
+                <div class="tab-pane fade" id="history" role="tabpanel">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title mb-0">Your Pick History</h5>
+                        </div>
+                        <div class="card-body">
+                            <div id="pickHistoryContainer">
+                                <div class="text-center">
+                                    <div class="spinner-border" role="status"></div>
+                                    <p class="mt-2">Loading pick history...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Upcoming Fixtures Tab -->
+                <div class="tab-pane fade" id="fixtures" role="tabpanel">
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="card-title mb-0">Upcoming Fixtures</h5>
+                                <small class="text-muted" id="currentRoundInfo"></small>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div id="upcomingFixturesContainer">
+                                <div class="text-center">
+                                    <div class="spinner-border" role="status"></div>
+                                    <p class="mt-2">Loading fixtures...</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.player-status-active { background-color: #d4edda; color: #155724; }
+.player-status-eliminated { background-color: #f8d7da; color: #721c24; }
+.player-status-winner { background-color: #cce5ff; color: #004085; }
+
+.pick-winner { background-color: #d4edda !important; color: #155724; font-weight: bold; }
+.pick-loser { background-color: #f8d7da !important; color: #721c24; text-decoration: line-through; }
+.pick-pending { background-color: #fff3cd !important; color: #856404; }
+
+.team-used { opacity: 0.6; }
+.team-available { font-weight: bold; }
+
+.status-badge {
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: bold;
+}
+
+.status-active { background-color: #28a745; color: white; }
+.status-eliminated { background-color: #dc3545; color: white; }
+.status-winner { background-color: #007bff; color: white; }
+
+@media (max-width: 768px) {
+    .nav-tabs .nav-link {
+        font-size: 0.9rem;
+        padding: 0.5rem 0.75rem;
+    }
+    
+    .card-body {
+        padding: 1rem 0.75rem;
+    }
+    
+    .table-responsive {
+        font-size: 0.9rem;
+    }
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const playerToken = '{{ token }}';
+let dashboardData = {};
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadAllDashboardData();
+    
+    // Add event listeners for tab switches
+    document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
+        tab.addEventListener('shown.bs.tab', function(event) {
+            const targetId = event.target.getAttribute('data-bs-target').replace('#', '');
+            if (targetId === 'history' && !dashboardData.pickHistory) {
+                loadPickHistory();
+            } else if (targetId === 'fixtures' && !dashboardData.upcomingFixtures) {
+                loadUpcomingFixtures();
+            }
+        });
+    });
+});
+
+async function loadAllDashboardData() {
+    try {
+        await loadLeagueTable();
+        updatePlayerStats();
+    } catch (error) {
+        console.error('Error loading dashboard data:', error);
+    }
+}
+
+async function loadLeagueTable() {
+    try {
+        const response = await fetch(`/api/player/${playerToken}/league-table`);
+        const data = await response.json();
+        
+        if (data.success) {
+            dashboardData.leagueTable = data.league_table;
+            renderLeagueTable(data.league_table);
+        } else {
+            showError('leagueTableContainer', 'Failed to load league table');
+        }
+    } catch (error) {
+        showError('leagueTableContainer', 'Error loading league table');
+    }
+}
+
+async function loadPickHistory() {
+    try {
+        const response = await fetch(`/api/player/${playerToken}/pick-history`);
+        const data = await response.json();
+        
+        if (data.success) {
+            dashboardData.pickHistory = data.pick_history;
+            renderPickHistory(data.pick_history);
+        } else {
+            showError('pickHistoryContainer', 'Failed to load pick history');
+        }
+    } catch (error) {
+        showError('pickHistoryContainer', 'Error loading pick history');
+    }
+}
+
+async function loadUpcomingFixtures() {
+    try {
+        const response = await fetch(`/api/player/${playerToken}/upcoming-fixtures`);
+        const data = await response.json();
+        
+        if (data.success) {
+            dashboardData.upcomingFixtures = data;
+            renderUpcomingFixtures(data);
+        } else {
+            showError('upcomingFixturesContainer', 'Failed to load upcoming fixtures');
+        }
+    } catch (error) {
+        showError('upcomingFixturesContainer', 'Error loading upcoming fixtures');
+    }
+}
+
+function renderLeagueTable(players) {
+    const container = document.getElementById('leagueTableContainer');
+    
+    if (players.length === 0) {
+        container.innerHTML = '<p class="text-muted">No players found.</p>';
+        return;
+    }
+    
+    let html = `
+        <div class="table-responsive">
+            <table class="table table-sm table-hover">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Pos</th>
+                        <th>Player</th>
+                        <th>Status</th>
+                        <th>Rounds</th>
+                        <th>W-L-P</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    players.forEach((player, index) => {
+        const isCurrentPlayer = player.name === '{{ player.name }}';
+        const rowClass = `player-status-${player.status} ${isCurrentPlayer ? 'table-warning' : ''}`;
+        
+        html += `
+            <tr class="${rowClass}">
+                <td><strong>${index + 1}</strong></td>
+                <td>
+                    ${player.name}
+                    ${isCurrentPlayer ? '<i class="fas fa-user text-primary ms-1"></i>' : ''}
+                </td>
+                <td>
+                    <span class="status-badge status-${player.status}">
+                        ${player.status.toUpperCase()}
+                    </span>
+                </td>
+                <td><strong>${player.rounds_survived}</strong></td>
+                <td>${player.wins}-${player.losses}-${player.pending}</td>
+            </tr>
+        `;
+    });
+    
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+}
+
+function renderPickHistory(picks) {
+    const container = document.getElementById('pickHistoryContainer');
+    
+    if (picks.length === 0) {
+        container.innerHTML = '<p class="text-muted">No picks made yet.</p>';
+        return;
+    }
+    
+    let html = `
+        <div class="table-responsive">
+            <table class="table table-sm">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Round</th>
+                        <th>PL MD</th>
+                        <th>Team Picked</th>
+                        <th>Result</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    picks.forEach(pick => {
+        let resultClass = 'pick-pending';
+        let resultText = 'Pending';
+        
+        if (pick.is_winner === true) {
+            resultClass = 'pick-winner';
+            resultText = '✓ Won';
+        } else if (pick.is_winner === false) {
+            resultClass = 'pick-loser';
+            resultText = '✗ Lost';
+        }
+        
+        html += `
+            <tr>
+                <td><strong>R${pick.round_number}</strong></td>
+                <td>MD ${pick.pl_matchday || '-'}</td>
+                <td class="${resultClass}">${pick.team_picked}</td>
+                <td class="${resultClass}">${resultText}</td>
+                <td>${pick.timestamp || '-'}</td>
+            </tr>
+        `;
+    });
+    
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+}
+
+function renderUpcomingFixtures(data) {
+    const container = document.getElementById('upcomingFixturesContainer');
+    const roundInfo = document.getElementById('currentRoundInfo');
+    
+    if (!data.current_round) {
+        container.innerHTML = '<p class="text-muted">No active round found.</p>';
+        roundInfo.textContent = '';
+        return;
+    }
+    
+    roundInfo.textContent = `Round ${data.current_round.round_number} - PL Matchday ${data.current_round.pl_matchday}`;
+    
+    if (data.has_picked) {
+        container.innerHTML = `
+            <div class="alert alert-success">
+                <strong>✓ Pick Made:</strong> You have selected <strong>${data.current_pick}</strong> for this round.
+                <br><small class="text-muted">You can still edit your pick using the link above.</small>
+            </div>
+        `;
+        return;
+    }
+    
+    if (data.fixtures.length === 0) {
+        container.innerHTML = '<p class="text-muted">No fixtures available for this round.</p>';
+        return;
+    }
+    
+    let html = '<div class="row">';
+    
+    data.fixtures.forEach(fixture => {
+        const homeUsed = fixture.home_used;
+        const awayUsed = fixture.away_used;
+        const bothUsed = homeUsed && awayUsed;
+        
+        html += `
+            <div class="col-12 col-sm-6 col-lg-4 mb-3">
+                <div class="card h-100 ${bothUsed ? 'opacity-50' : ''}">
+                    <div class="card-body p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <small class="text-muted">
+                                ${fixture.date ? new Date(fixture.date).toLocaleDateString() : ''}
+                                ${fixture.time || ''}
+                            </small>
+                        </div>
+                        <div class="text-center">
+                            <div class="mb-2">
+                                <strong class="${homeUsed ? 'team-used' : 'team-available'}">
+                                    ${fixture.home_team}
+                                    ${homeUsed ? ' ✓' : ''}
+                                </strong>
+                            </div>
+                            <div class="text-muted mb-2">vs</div>
+                            <div>
+                                <strong class="${awayUsed ? 'team-used' : 'team-available'}">
+                                    ${fixture.away_team}
+                                    ${awayUsed ? ' ✓' : ''}
+                                </strong>
+                            </div>
+                        </div>
+                        ${bothUsed ? '<small class="text-muted d-block text-center mt-2">Both teams used</small>' : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    
+    if (data.used_teams.length > 0) {
+        html += `
+            <div class="mt-4">
+                <h6>Teams Already Used:</h6>
+                <div class="d-flex flex-wrap gap-2">
+                    ${data.used_teams.map(team => `<span class="badge bg-secondary">${team}</span>`).join('')}
+                </div>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+}
+
+function updatePlayerStats() {
+    if (!dashboardData.leagueTable) return;
+    
+    const currentPlayer = dashboardData.leagueTable.find(p => p.name === '{{ player.name }}');
+    if (currentPlayer) {
+        document.getElementById('roundsSurvived').textContent = currentPlayer.rounds_survived;
+        document.getElementById('totalWins').textContent = currentPlayer.wins;
+        document.getElementById('usedTeams').textContent = currentPlayer.total_picks;
+        
+        // Update status styling
+        const statusElement = document.getElementById('playerStatus');
+        statusElement.className = `mb-1 status-badge status-${currentPlayer.status}`;
+    }
+}
+
+function refreshDashboard() {
+    // Clear cached data
+    dashboardData = {};
+    
+    // Reload current tab data
+    const activeTab = document.querySelector('.nav-link.active');
+    const activeTabId = activeTab.getAttribute('data-bs-target').replace('#', '');
+    
+    if (activeTabId === 'league') {
+        loadLeagueTable();
+    } else if (activeTabId === 'history') {
+        loadPickHistory();
+    } else if (activeTabId === 'fixtures') {
+        loadUpcomingFixtures();
+    }
+}
+
+function showError(containerId, message) {
+    const container = document.getElementById(containerId);
+    container.innerHTML = `<div class="alert alert-danger">${message}</div>`;
+}
+</script>
+{% endblock %}

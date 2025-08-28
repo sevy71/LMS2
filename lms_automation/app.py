@@ -1240,7 +1240,8 @@ def make_pick(token):
                              team_picked=existing_pick.team_picked,
                              already_picked=True,
                              can_edit=False,
-                             edits_remaining=0)
+                             edits_remaining=0,
+                             token=token)
     
     # Get fixtures for this round
     fixtures = Fixture.query.filter_by(round_id=round_obj.id).all()
@@ -1321,7 +1322,8 @@ def make_pick(token):
                              team_picked=team_picked,
                              already_picked=not is_new_pick,
                              can_edit=pick_token.edit_count < 2,
-                             edits_remaining=2 - pick_token.edit_count)
+                             edits_remaining=2 - pick_token.edit_count,
+                             token=token)
     
     # GET request - show the pick form
     return render_template('pick_form.html', 
@@ -1331,7 +1333,8 @@ def make_pick(token):
                          used_teams=used_teams,
                          existing_pick=existing_pick,
                          can_edit=can_edit,
-                         edits_remaining=edits_remaining)
+                         edits_remaining=edits_remaining,
+                         token=token)
 
 @app.route('/register')
 def player_registration():
@@ -1444,6 +1447,153 @@ def generate_general_registration_link():
             'link_type': 'general'
         })
         
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/dashboard/<token>')
+def player_dashboard(token):
+    """Player dashboard accessible via token"""
+    # Find the pick token
+    pick_token = PickToken.query.filter_by(token=token).first()
+    
+    if not pick_token:
+        return render_template('pick_error.html', error="Invalid dashboard link"), 404
+    
+    player = pick_token.player
+    current_round = Round.query.filter_by(status='active').first()
+    
+    return render_template('player_dashboard.html', 
+                         player=player, 
+                         current_round=current_round,
+                         token=token)
+
+@app.route('/api/player/<token>/league-table')
+def get_player_league_table(token):
+    """API endpoint for league table data"""
+    pick_token = PickToken.query.filter_by(token=token).first()
+    if not pick_token:
+        return jsonify({'success': False, 'error': 'Invalid token'}), 404
+    
+    try:
+        players = Player.query.all()
+        league_data = []
+        
+        for player in players:
+            picks = Pick.query.filter_by(player_id=player.id).all()
+            wins = sum(1 for pick in picks if pick.is_winner == True)
+            losses = sum(1 for pick in picks if pick.is_winner == False)
+            pending = sum(1 for pick in picks if pick.is_winner is None)
+            rounds_survived = wins
+            
+            league_data.append({
+                'name': player.name,
+                'status': player.status,
+                'rounds_survived': rounds_survived,
+                'wins': wins,
+                'losses': losses,
+                'pending': pending,
+                'total_picks': len(picks)
+            })
+        
+        # Sort by status priority and then by rounds survived
+        status_priority = {'active': 1, 'winner': 2, 'eliminated': 3}
+        league_data.sort(key=lambda x: (status_priority.get(x['status'], 4), -x['rounds_survived'], x['name']))
+        
+        return jsonify({
+            'success': True,
+            'league_table': league_data
+        })
+    
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/player/<token>/pick-history')
+def get_player_pick_history(token):
+    """API endpoint for player's pick history"""
+    pick_token = PickToken.query.filter_by(token=token).first()
+    if not pick_token:
+        return jsonify({'success': False, 'error': 'Invalid token'}), 404
+    
+    try:
+        player = pick_token.player
+        picks = Pick.query.filter_by(player_id=player.id).join(Round).order_by(Round.round_number).all()
+        
+        pick_history = []
+        for pick in picks:
+            round_info = Round.query.get(pick.round_id)
+            pick_history.append({
+                'round_number': round_info.round_number,
+                'pl_matchday': round_info.pl_matchday,
+                'team_picked': pick.team_picked,
+                'is_winner': pick.is_winner,
+                'timestamp': pick.timestamp.strftime('%Y-%m-%d %H:%M') if pick.timestamp else None,
+                'round_status': round_info.status
+            })
+        
+        return jsonify({
+            'success': True,
+            'pick_history': pick_history,
+            'player_name': player.name
+        })
+    
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/player/<token>/upcoming-fixtures')
+def get_player_upcoming_fixtures(token):
+    """API endpoint for upcoming fixtures and available teams"""
+    pick_token = PickToken.query.filter_by(token=token).first()
+    if not pick_token:
+        return jsonify({'success': False, 'error': 'Invalid token'}), 404
+    
+    try:
+        player = pick_token.player
+        current_round = Round.query.filter_by(status='active').first()
+        
+        if not current_round:
+            return jsonify({
+                'success': True,
+                'current_round': None,
+                'fixtures': [],
+                'used_teams': [],
+                'has_picked': False
+            })
+        
+        # Get fixtures for current round
+        fixtures = Fixture.query.filter_by(round_id=current_round.id).all()
+        
+        # Get player's used teams
+        previous_picks = Pick.query.filter_by(player_id=player.id).all()
+        used_teams = [pick.team_picked for pick in previous_picks]
+        
+        # Check if player has already picked for current round
+        current_pick = Pick.query.filter_by(player_id=player.id, round_id=current_round.id).first()
+        
+        fixtures_data = []
+        for fixture in fixtures:
+            fixtures_data.append({
+                'home_team': fixture.home_team,
+                'away_team': fixture.away_team,
+                'date': fixture.date.strftime('%Y-%m-%d') if fixture.date else None,
+                'time': fixture.time.strftime('%H:%M') if fixture.time else None,
+                'status': fixture.status,
+                'home_used': fixture.home_team in used_teams,
+                'away_used': fixture.away_team in used_teams
+            })
+        
+        return jsonify({
+            'success': True,
+            'current_round': {
+                'round_number': current_round.round_number,
+                'pl_matchday': current_round.pl_matchday,
+                'status': current_round.status
+            },
+            'fixtures': fixtures_data,
+            'used_teams': used_teams,
+            'has_picked': current_pick is not None,
+            'current_pick': current_pick.team_picked if current_pick else None
+        })
+    
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
