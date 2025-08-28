@@ -4,7 +4,7 @@
 
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-md-6">
+    <div class="col-12 col-sm-10 col-md-8 col-lg-6">
         <div class="card shadow">
             <div class="card-header bg-success text-white text-center">
                 <h4 class="mb-0">
@@ -12,59 +12,89 @@
                     {% if already_picked %}Pick Updated Successfully!{% else %}Pick Submitted Successfully!{% endif %}
                 </h4>
             </div>
-            <div class="card-body text-center py-5">
+            <div class="card-body text-center py-4 py-md-5">
                 <div class="mb-4">
-                    <h5>Hello, {{ player.name }}</h5>
-                    <p class="text-muted">Round {{ round.round_number }} - Premier League Matchday {{ round.pl_matchday }}</p>
+                    <h4 class="h5">Hello, {{ player.name }}</h4>
+                    <p class="text-muted mb-0">Round {{ round.round_number }} - Premier League Matchday {{ round.pl_matchday }}</p>
                 </div>
 
                 <div class="alert alert-success">
-                    <h6 class="mb-2">Your pick:</h6>
-                    <h4 class="mb-0"><strong>{{ team_picked }}</strong></h4>
+                    <h6 class="mb-2 fw-bold">Your pick:</h6>
+                    <h3 class="h4 mb-0"><strong>{{ team_picked }}</strong></h3>
                 </div>
 
                 {% if already_picked %}
-                    <p class="text-success mb-4">
+                    <div class="alert alert-success border-0 mb-4">
                         <i class="fas fa-edit me-2"></i>
-                        Your pick has been updated! You will be notified of the results after all matches are completed.
-                    </p>
+                        <strong>Pick Updated!</strong><br>
+                        <small>You will be notified of the results after all matches are completed.</small>
+                    </div>
                 {% else %}
-                    <p class="text-success mb-4">
+                    <div class="alert alert-success border-0 mb-4">
                         <i class="fas fa-thumbs-up me-2"></i>
-                        Your pick has been recorded! You will be notified of the results after all matches are completed.
-                    </p>
+                        <strong>Pick Recorded!</strong><br>
+                        <small>You will be notified of the results after all matches are completed.</small>
+                    </div>
                 {% endif %}
                 
                 {% if edits_remaining is defined and edits_remaining > 0 %}
-                    <div class="alert alert-info">
-                        <i class="fas fa-info-circle me-2"></i>
-                        You can still change this pick <strong>{{ edits_remaining }} more time{{ 's' if edits_remaining != 1 else '' }}</strong> using this same link.
+                    <div class="alert alert-info border-0">
+                        <div class="d-flex align-items-center justify-content-center">
+                            <i class="fas fa-info-circle me-2"></i>
+                            <div class="text-start">
+                                <strong>Changes Available</strong><br>
+                                <small>You can change this pick <strong>{{ edits_remaining }} more time{{ 's' if edits_remaining != 1 else '' }}</strong> using this same link.</small>
+                            </div>
+                        </div>
                     </div>
                 {% endif %}
 
                 <div class="mt-4">
-                    <h6>What happens next?</h6>
-                    <ul class="list-unstyled text-start">
-                        <li><i class="fas fa-clock text-primary me-2"></i> Wait for the matches to be played</li>
-                        <li><i class="fas fa-trophy text-warning me-2"></i> If your team wins, you advance to the next round</li>
-                        <li><i class="fas fa-times text-danger me-2"></i> If your team loses or draws, you're eliminated</li>
-                        <li><i class="fas fa-bell text-info me-2"></i> You'll receive notifications about results and next rounds</li>
-                    </ul>
+                    <h6 class="mb-3">What happens next?</h6>
+                    <div class="row g-2 text-start">
+                        <div class="col-12 col-sm-6">
+                            <div class="d-flex align-items-center mb-2">
+                                <i class="fas fa-clock text-primary me-2" style="min-width: 20px;"></i>
+                                <small>Wait for matches to be played</small>
+                            </div>
+                            <div class="d-flex align-items-center mb-2">
+                                <i class="fas fa-trophy text-warning me-2" style="min-width: 20px;"></i>
+                                <small>If your team wins, you advance</small>
+                            </div>
+                        </div>
+                        <div class="col-12 col-sm-6">
+                            <div class="d-flex align-items-center mb-2">
+                                <i class="fas fa-times text-danger me-2" style="min-width: 20px;"></i>
+                                <small>If your team loses/draws, you're out</small>
+                            </div>
+                            <div class="d-flex align-items-center mb-2">
+                                <i class="fas fa-bell text-info me-2" style="min-width: 20px;"></i>
+                                <small>You'll get result notifications</small>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="mt-4">
-                    <small class="text-muted">
-                        Good luck! Remember, this is a Last Man Standing competition - 
-                        every pick counts towards survival.
-                    </small>
+                <div class="mt-4 px-2">
+                    <div class="alert alert-light border-0 mb-0">
+                        <small class="text-muted d-block">
+                            <i class="fas fa-star text-warning me-1"></i>
+                            <strong>Good luck!</strong>
+                        </small>
+                        <small class="text-muted">
+                            Remember: this is Last Man Standing - every pick counts!
+                        </small>
+                    </div>
                 </div>
             </div>
-            <div class="card-footer text-center">
-                <small class="text-muted">
+            <div class="card-footer text-center bg-light">
+                <small class="text-muted d-block">
                     {% if can_edit is defined and can_edit %}
-                        This link can be used {{ edits_remaining }} more time{{ 's' if edits_remaining != 1 else '' }}.
+                        <i class="fas fa-link me-1"></i>
+                        This link can be used {{ edits_remaining }} more time{{ 's' if edits_remaining != 1 else '' }}
                     {% else %}
-                        This pick link is no longer valid.
+                        <i class="fas fa-lock me-1"></i>
+                        This pick link is no longer valid
                     {% endif %}
                 </small>
             </div>

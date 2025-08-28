@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - Last Man Standing{% endblock %}
+
+{% block content %}
+<!-- Header with better spacing -->
+<div class="row mb-4">
+    <div class="col-12 d-flex justify-content-between align-items-center">
+        <h1 class="mb-0">Admin Dashboard</h1>
+        <div>
+            <button class="btn btn-outline-info me-2" data-bs-toggle="modal" data-bs-target="#changePasswordModal">
+                <i class="fas fa-key"></i> Change Password
+            </button>
+            <a href="{{ url_for('admin_logout') }}" class="btn btn-outline-secondary">
+                <i class="fas fa-sign-out-alt"></i> Logout
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- HERO SECTION - Most Important Info -->
+<div class="row mb-5">
+    <div class="col-lg-8">
+        <div class="card border-primary shadow-sm">
+            <div class="card-header bg-primary text-white">
+                <h4 class="mb-0">
+                    <i class="fas fa-play-circle me-2"></i>Current Round Status
+                </h4>
+            </div>
+            <div class="card-body p-4">
+                {% if current_round %}
+                    <div class="d-flex justify-content-between align-items-start mb-3">
+                        <div>
+                            <h2 class="text-primary mb-2">Round {{ current_round.round_number }}</h2>
+                            <p class="text-muted mb-0">Premier League Matchday {{ current_round.pl_matchday }}</p>
+                        </div>
+                        <span class="badge {% if current_round.status == 'active' %}bg-success{% elif current_round.status == 'pending' %}bg-warning{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">
+                            {{ current_round.status.title() }}
+                        </span>
+                    </div>
+                    
+                    {% if current_round.start_date or current_round.end_date %}
+                        <div class="row text-center">
+                            {% if current_round.start_date %}
+                                <div class="col-6">
+                                    <i class="fas fa-calendar-plus text-success"></i>
+                                    <strong class="d-block">Start</strong>
+                                    <small class="text-muted">{{ current_round.start_date.strftime('%d %b %Y, %H:%M') }}</small>
+                                </div>
+                            {% endif %}
+                            {% if current_round.end_date %}
+                                <div class="col-6">
+                                    <i class="fas fa-calendar-times text-danger"></i>
+                                    <strong class="d-block">Deadline</strong>
+                                    <small class="text-muted">{{ current_round.end_date.strftime('%d %b %Y, %H:%M') }}</small>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                {% else %}
+                    <div class="text-center py-4">
+                        <i class="fas fa-exclamation-triangle text-warning fa-3x mb-3"></i>
+                        <h4 class="text-muted">No Active Round</h4>
+                        <p class="mb-3">Create a new round to get started</p>
+                        <button class="btn btn-primary btn-lg" data-bs-toggle="modal" data-bs-target="#createRoundModal">
+                            <i class="fas fa-plus me-2"></i>Create New Round
+                        </button>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card shadow-sm h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Competition Stats</h5>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-12 mb-3">
+                        <h3 class="text-primary mb-0">{{ players|length }}</h3>
+                        <small class="text-muted">Total Players</small>
+                    </div>
+                    <div class="col-6">
+                        <h4 class="text-success mb-0">{{ players|selectattr('status', 'equalto', 'active')|list|length }}</h4>
+                        <small class="text-muted">Active</small>
+                    </div>
+                    <div class="col-6">
+                        <h4 class="text-danger mb-0">{{ players|selectattr('status', 'equalto', 'eliminated')|list|length }}</h4>
+                        <small class="text-muted">Eliminated</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- PRIMARY ACTIONS - Most Used -->
+<div class="row mb-4">
+    <div class="col-12">
+        <h3 class="mb-3">
+            <i class="fas fa-tasks me-2"></i>Primary Actions
+            <small class="text-muted">- Daily Operations</small>
+        </h3>
+    </div>
+</div>
+
+<div class="row mb-5">
+    <div class="col-lg-4 mb-3">
+        <div class="card border-warning shadow-sm h-100">
+            <div class="card-body text-center p-4">
+                <i class="fas fa-paper-plane text-warning fa-2x mb-3"></i>
+                <h5 class="card-title">Send Pick Links</h5>
+                <p class="card-text text-muted">Send WhatsApp links to all active players for current round</p>
+                <a href="{{ url_for('send_picks') }}" class="btn btn-warning btn-lg w-100">
+                    <i class="fas fa-paper-plane me-2"></i>Send Links
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4 mb-3">
+        <div class="card border-info shadow-sm h-100">
+            <div class="card-body text-center p-4">
+                <i class="fas fa-trophy text-info fa-2x mb-3"></i>
+                <h5 class="card-title">Process Results</h5>
+                <p class="card-text text-muted">Enter match results and eliminate players whose teams lost</p>
+                <button class="btn btn-info btn-lg w-100" data-bs-toggle="modal" data-bs-target="#resultsModal">
+                    <i class="fas fa-calculator me-2"></i>Process Results
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4 mb-3">
+        <div class="card border-success shadow-sm h-100">
+            <div class="card-body text-center p-4">
+                <i class="fas fa-plus text-success fa-2x mb-3"></i>
+                <h5 class="card-title">Create New Round</h5>
+                <p class="card-text text-muted">Set up the next round with PL fixtures and dates</p>
+                <button class="btn btn-success btn-lg w-100" data-bs-toggle="modal" data-bs-target="#createRoundModal">
+                    <i class="fas fa-plus me-2"></i>New Round
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- SECONDARY ACTIONS - Regular Use -->
+<div class="row mb-4">
+    <div class="col-12">
+        <h4 class="mb-3">
+            <i class="fas fa-cogs me-2"></i>Management Tools
+            <small class="text-muted">- Regular Operations</small>
+        </h4>
+    </div>
+</div>
+
+<div class="row mb-5">
+    <div class="col-lg-3 col-md-6 mb-3">
+        <button class="btn btn-outline-primary w-100 py-3" data-bs-toggle="modal" data-bs-target="#addFixturesModal">
+            <i class="fas fa-futbol d-block mb-2"></i>
+            Add Fixtures
+        </button>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+        <a href="{{ url_for('picks_grid') }}" class="btn btn-outline-info w-100 py-3">
+            <i class="fas fa-th d-block mb-2"></i>
+            Picks Grid
+        </a>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+        <button class="btn btn-outline-success w-100 py-3" data-bs-toggle="modal" data-bs-target="#statsModal">
+            <i class="fas fa-chart-bar d-block mb-2"></i>
+            Statistics
+        </button>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
+        <button class="btn btn-outline-info w-100 py-3" data-bs-toggle="modal" data-bs-target="#exportModal">
+            <i class="fas fa-download d-block mb-2"></i>
+            Export Data
+        </button>
+    </div>
+</div>
+
+<!-- UTILITY ACTIONS - Occasional Use -->
+<div class="row mb-4">
+    <div class="col-12">
+        <button class="btn btn-link p-0 text-decoration-none" type="button" data-bs-toggle="collapse" data-bs-target="#utilityActions">
+            <h5 class="mb-0">
+                <i class="fas fa-tools me-2"></i>Utility Actions
+                <small class="text-muted">- Occasional Use</small>
+                <i class="fas fa-chevron-down ms-2"></i>
+            </h5>
+        </button>
+    </div>
+</div>
+
+<div class="collapse" id="utilityActions">
+    <div class="row mb-5">
+        <div class="col-lg-4 col-md-6 mb-3">
+            <button class="btn btn-outline-success w-100 py-2" id="generateGeneralLinkBtn">
+                <i class="fas fa-link me-2"></i>General Registration Link
+            </button>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-3">
+            <button class="btn btn-outline-danger w-100 py-2" data-bs-toggle="modal" data-bs-target="#resetGameModal">
+                <i class="fas fa-trash me-2"></i>Reset Game
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- PLAYERS SECTION - Collapsible -->
+<div class="row mb-4">
+    <div class="col-12">
+        <button class="btn btn-link p-0 text-decoration-none w-100 text-start" type="button" data-bs-toggle="collapse" data-bs-target="#playersSection">
+            <h4 class="mb-0">
+                <i class="fas fa-users me-2"></i>Player Management
+                <span class="badge bg-secondary ms-2">{{ players|length }} players</span>
+                <i class="fas fa-chevron-down ms-auto"></i>
+            </h4>
+        </button>
+    </div>
+</div>
+
+<div class="collapse show" id="playersSection">
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">Players</h5>
+                    <div class="dropdown">
+                        <button class="btn btn-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                            Add Player
+                        </button>
+                        <ul class="dropdown-menu">
+                            <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#addPlayerModal">Add Single Player</a></li>
+                            <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#bulkPlayerModal">Bulk Import Players</a></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% if players %}
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>
+                                            <button type="button" class="btn btn-link p-0 text-dark fw-bold" id="sortNameBtn" onclick="sortPlayersByName()">
+                                                Name <span id="nameSortIcon">↕️</span>
+                                            </button>
+                                        </th>
+                                        <th>WhatsApp Number</th>
+                                        <th>Status</th>
+                                        <th>Unreachable</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for player in players %}
+                                        <tr>
+                                            <td>{{ player.id }}</td>
+                                            <td>{{ player.name }}</td>
+                                            <td>{{ player.whatsapp_number }}</td>
+                                            <td>
+                                                <span class="badge 
+                                                    {% if player.status == 'active' %}bg-success
+                                                    {% elif player.status == 'eliminated' %}bg-danger
+                                                    {% else %}bg-warning{% endif %}">
+                                                    {{ player.status.title() }}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                {% if player.unreachable %}
+                                                    <span class="badge bg-warning">Yes</span>
+                                                {% else %}
+                                                    <span class="badge bg-success">No</span>
+                                                {% endif %}
+                                            </td>
+                                            <td>
+                                                <button class="btn btn-sm btn-outline-primary edit-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}" data-player-whatsapp="{{ player.whatsapp_number }}">Edit</button>
+                                                {% if player.whatsapp_number %}
+                                                    <button class="btn btn-sm btn-outline-info registration-link-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}" title="Generate registration link for family members">Share Link</button>
+                                                {% endif %}
+                                                {% if player.status == 'active' %}
+                                                    <button class="btn btn-sm btn-outline-warning eliminate-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}">Eliminate</button>
+                                                {% else %}
+                                                    <button class="btn btn-sm btn-outline-success reactivate-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}">Reactivate</button>
+                                                {% endif %}
+                                                <button class="btn btn-sm btn-outline-danger delete-player-btn" data-player-id="{{ player.id }}" data-player-name="{{ player.name }}">Delete</button>
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    {% else %}
+                        <p class="text-muted">No players registered yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- All existing modals would go here - keeping them unchanged -->

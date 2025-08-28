@@ -4,7 +4,7 @@
 
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-md-8">
+    <div class="col-12 col-lg-8">
         <div class="card shadow">
             <div class="card-header bg-primary text-white">
                 <h4 class="mb-0">Make Your Pick - Round {{ round.round_number }}</h4>
@@ -38,9 +38,9 @@
                         <h5>Premier League Fixtures - Matchday {{ round.pl_matchday }}</h5>
                         <div class="row">
                             {% for fixture in fixtures %}
-                                <div class="col-md-6 mb-3">
+                                <div class="col-12 col-sm-6 col-lg-6 mb-3">
                                     <div class="card h-100 {% if fixture.home_team in used_teams and fixture.away_team in used_teams %}opacity-50{% endif %}">
-                                        <div class="card-body p-3">
+                                        <div class="card-body p-2 p-sm-3">
                                             <div class="fixture-info mb-2">
                                                 {% if fixture.date %}
                                                     <small class="text-muted">{{ fixture.date.strftime('%a %d %b') }}</small>
@@ -52,37 +52,46 @@
                                             
                                             <div class="teams">
                                                 <!-- Home Team -->
-                                                <div class="form-check mb-2">
-                                                    <input class="form-check-input" type="radio" name="team_picked" 
+                                                <div class="form-check mb-2 p-2 rounded" style="min-height: 44px; display: flex; align-items: center;">
+                                                    <input class="form-check-input me-3" type="radio" name="team_picked" 
                                                            value="{{ fixture.home_team }}" 
                                                            id="home_{{ fixture.id }}"
+                                                           style="transform: scale(1.2);"
                                                            {% if fixture.home_team in used_teams and (not existing_pick or existing_pick.team_picked != fixture.home_team) %}disabled{% endif %}
                                                            {% if existing_pick and existing_pick.team_picked == fixture.home_team %}checked{% endif %}>
-                                                    <label class="form-check-label {% if fixture.home_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
-                                                           for="home_{{ fixture.id }}">
-                                                        <strong class="{% if fixture.home_team in used_teams %}text-secondary{% endif %}">{{ fixture.home_team }}</strong> (Home)
+                                                    <label class="form-check-label flex-grow-1 {% if fixture.home_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
+                                                           for="home_{{ fixture.id }}" style="cursor: pointer; user-select: none;">
+                                                        <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start">
+                                                            <strong class="{% if fixture.home_team in used_teams %}text-secondary{% else %}text-dark{% endif %}">{{ fixture.home_team }}</strong>
+                                                            <small class="text-muted">(Home)</small>
+                                                        </div>
                                                         {% if fixture.home_team in used_teams %}
-                                                            <small class="text-danger fw-bold">(ALREADY USED ❌)</small>
+                                                            <small class="text-danger fw-bold d-block">(ALREADY USED ❌)</small>
                                                         {% endif %}
                                                     </label>
                                                 </div>
                                                 
-                                                <div class="text-center my-1">
-                                                    <small class="text-muted">vs</small>
+                                                <div class="text-center my-2">
+                                                    <small class="text-muted fw-bold">VS</small>
+                                                    <hr class="my-1" style="opacity: 0.3;">
                                                 </div>
                                                 
                                                 <!-- Away Team -->
-                                                <div class="form-check">
-                                                    <input class="form-check-input" type="radio" name="team_picked" 
+                                                <div class="form-check p-2 rounded" style="min-height: 44px; display: flex; align-items: center;">
+                                                    <input class="form-check-input me-3" type="radio" name="team_picked" 
                                                            value="{{ fixture.away_team }}" 
                                                            id="away_{{ fixture.id }}"
+                                                           style="transform: scale(1.2);"
                                                            {% if fixture.away_team in used_teams and (not existing_pick or existing_pick.team_picked != fixture.away_team) %}disabled{% endif %}
                                                            {% if existing_pick and existing_pick.team_picked == fixture.away_team %}checked{% endif %}>
-                                                    <label class="form-check-label {% if fixture.away_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
-                                                           for="away_{{ fixture.id }}">
-                                                        <strong class="{% if fixture.away_team in used_teams %}text-secondary{% endif %}">{{ fixture.away_team }}</strong> (Away)
+                                                    <label class="form-check-label flex-grow-1 {% if fixture.away_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
+                                                           for="away_{{ fixture.id }}" style="cursor: pointer; user-select: none;">
+                                                        <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start">
+                                                            <strong class="{% if fixture.away_team in used_teams %}text-secondary{% else %}text-dark{% endif %}">{{ fixture.away_team }}</strong>
+                                                            <small class="text-muted">(Away)</small>
+                                                        </div>
                                                         {% if fixture.away_team in used_teams %}
-                                                            <small class="text-danger fw-bold">(ALREADY USED ❌)</small>
+                                                            <small class="text-danger fw-bold d-block">(ALREADY USED ❌)</small>
                                                         {% endif %}
                                                     </label>
                                                 </div>
@@ -96,22 +105,31 @@
 
                     {% if used_teams %}
                         <div class="alert alert-warning">
-                            <strong>Teams you've already used:</strong><br>
-                            {% for team in used_teams %}
-                                <span class="badge bg-secondary me-1">{{ team }}</span>
-                            {% endfor %}
+                            <strong class="d-block mb-2">Teams you've already used:</strong>
+                            <div class="d-flex flex-wrap gap-1">
+                                {% for team in used_teams %}
+                                    <span class="badge bg-secondary fs-6 px-2 py-1">{{ team }}</span>
+                                {% endfor %}
+                            </div>
                         </div>
                     {% endif %}
 
-                    <div class="text-center">
-                        <button type="submit" class="btn btn-primary btn-lg">
-                            {% if existing_pick %}Update My Pick{% else %}Submit My Pick{% endif %}
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary btn-lg py-3" style="font-size: 1.1rem;">
+                            {% if existing_pick %}
+                                <i class="fas fa-edit me-2"></i>Update My Pick
+                            {% else %}
+                                <i class="fas fa-paper-plane me-2"></i>Submit My Pick
+                            {% endif %}
                         </button>
                     </div>
                 </form>
             </div>
             <div class="card-footer text-muted text-center">
-                <small>Make sure to submit your pick before the deadline!</small>
+                <small class="d-block">
+                    <i class="fas fa-clock me-1"></i>
+                    Make sure to submit your pick before the deadline!
+                </small>
             </div>
         </div>
     </div>
