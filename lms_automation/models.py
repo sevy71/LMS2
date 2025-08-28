@@ -141,3 +141,90 @@ class PickToken(db.Model):
             base_url = f"https://{base_url}"
             
         return f"{base_url}/pick/{self.token}"
+
+class ReminderSchedule(db.Model):
+    __tablename__ = 'reminder_schedules'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    player_id = db.Column(db.Integer, db.ForeignKey('players.id'), nullable=False)
+    round_id = db.Column(db.Integer, db.ForeignKey('rounds.id'), nullable=False)
+    reminder_type = db.Column(db.String(20), nullable=False)  # '4_hour' or '1_hour'
+    scheduled_time = db.Column(db.DateTime, nullable=False)
+    sent_at = db.Column(db.DateTime, nullable=True)
+    is_sent = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    player = db.relationship('Player', backref='reminder_schedules')
+    round = db.relationship('Round', backref='reminder_schedules')
+    
+    def __repr__(self):
+        return f'<ReminderSchedule {self.reminder_type} for {self.player.name} R{self.round.round_number}>'
+    
+    @staticmethod
+    def create_reminders_for_round(round_id):
+        """Create reminder schedules for all active players in a round"""
+        round_obj = Round.query.get(round_id)
+        if not round_obj or not round_obj.end_date:
+            return False
+        
+        active_players = Player.query.filter_by(status='active').all()
+        
+        # Calculate reminder times
+        four_hour_reminder = round_obj.end_date - timedelta(hours=4)
+        one_hour_reminder = round_obj.end_date - timedelta(hours=1)
+        
+        reminders_created = 0
+        
+        for player in active_players:
+            # Check if reminders already exist
+            existing_4h = ReminderSchedule.query.filter_by(
+                player_id=player.id, 
+                round_id=round_id, 
+                reminder_type='4_hour'
+            ).first()
+            
+            existing_1h = ReminderSchedule.query.filter_by(
+                player_id=player.id, 
+                round_id=round_id, 
+                reminder_type='1_hour'
+            ).first()
+            
+            # Create 4-hour reminder
+            if not existing_4h and four_hour_reminder > datetime.utcnow():
+                reminder_4h = ReminderSchedule(
+                    player_id=player.id,
+                    round_id=round_id,
+                    reminder_type='4_hour',
+                    scheduled_time=four_hour_reminder
+                )
+                db.session.add(reminder_4h)
+                reminders_created += 1
+            
+            # Create 1-hour reminder
+            if not existing_1h and one_hour_reminder > datetime.utcnow():
+                reminder_1h = ReminderSchedule(
+                    player_id=player.id,
+                    round_id=round_id,
+                    reminder_type='1_hour',
+                    scheduled_time=one_hour_reminder
+                )
+                db.session.add(reminder_1h)
+                reminders_created += 1
+        
+        db.session.commit()
+        return reminders_created
+    
+    @staticmethod
+    def get_pending_reminders():
+        """Get all reminders that are due and haven't been sent"""
+        return ReminderSchedule.query.filter(
+            ReminderSchedule.is_sent == False,
+            ReminderSchedule.scheduled_time <= datetime.utcnow()
+        ).all()
+    
+    def mark_as_sent(self):
+        """Mark reminder as sent"""
+        self.is_sent = True
+        self.sent_at = datetime.utcnow()
+        db.session.commit()

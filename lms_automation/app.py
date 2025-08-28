@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from flask_migrate import Migrate
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import urllib.parse
 from functools import wraps
 
@@ -28,7 +28,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from models import db, Player, Round, Fixture, Pick, PickToken
+from models import db, Player, Round, Fixture, Pick, PickToken, ReminderSchedule
 
 
 # Initialize db with app
@@ -1596,6 +1596,161 @@ def get_player_upcoming_fixtures(token):
     
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+# Manual WhatsApp Reminder System
+class WhatsAppReminder:
+    """Class to handle WhatsApp reminder links for manual sending"""
+    
+    @staticmethod
+    def generate_reminder_data(player, round_obj, reminder_type, pick_token):
+        """Generate WhatsApp reminder data for manual sending"""
+        
+        if not player.whatsapp_number:
+            return None
+            
+        # Get base URL
+        base_url = os.environ.get('BASE_URL', 'https://localhost:5000')
+        if not base_url.startswith(('http://', 'https://')):
+            base_url = f"https://{base_url}"
+        
+        pick_url = pick_token.get_pick_url(base_url)
+        dashboard_url = f"{base_url}/dashboard/{pick_token.token}"
+        
+        # Customize message based on reminder type
+        if reminder_type == '4_hour':
+            urgency = "⏰ 4 hours left!"
+            time_msg = "You have 4 hours remaining"
+        elif reminder_type == '1_hour':
+            urgency = "🚨 URGENT - 1 hour left!"
+            time_msg = "Only 1 hour remaining"
+        else:
+            urgency = "📝 Reminder"
+            time_msg = "Don't forget"
+        
+        message = f"""{urgency}
+
+Hi {player.name}! 👋
+
+{time_msg} to submit your pick for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday}).
+
+Haven't picked yet? Don't get eliminated! 
+
+🎯 Make your pick: {pick_url}
+
+📊 Check your dashboard: {dashboard_url}
+
+Good luck! 🍀
+Last Man Standing"""
+        
+        # Generate WhatsApp web link
+        encoded_message = message.replace('\n', '%0A').replace(' ', '%20')
+        clean_number = player.whatsapp_number.replace('+', '')
+        whatsapp_link = f"https://web.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
+        
+        return {
+            'player_name': player.name,
+            'player_id': player.id,
+            'whatsapp_number': player.whatsapp_number,
+            'message': message,
+            'whatsapp_link': whatsapp_link,
+            'reminder_type': reminder_type,
+            'round_number': round_obj.round_number
+        }
+    
+def get_due_reminders():
+    """Get reminders that are due and ready for manual sending"""
+    try:
+        with app.app_context():
+            pending_reminders = ReminderSchedule.get_pending_reminders()
+            reminder_data = []
+            
+            for reminder in pending_reminders:
+                # Check if player has already made a pick for this round
+                existing_pick = Pick.query.filter_by(
+                    player_id=reminder.player_id,
+                    round_id=reminder.round_id
+                ).first()
+                
+                if existing_pick:
+                    print(f"Player {reminder.player.name} already picked for R{reminder.round.round_number}, marking reminder as sent")
+                    reminder.mark_as_sent()
+                    continue
+                
+                # Get or create pick token
+                pick_token = PickToken.create_for_player_round(reminder.player_id, reminder.round_id)
+                db.session.commit()
+                
+                # Generate reminder data
+                data = WhatsAppReminder.generate_reminder_data(
+                    reminder.player,
+                    reminder.round,
+                    reminder.reminder_type,
+                    pick_token
+                )
+                
+                if data:
+                    data['reminder_id'] = reminder.id
+                    data['scheduled_time'] = reminder.scheduled_time.isoformat()
+                    reminder_data.append(data)
+                    
+            return reminder_data
+            
+    except Exception as e:
+        print(f"Error getting due reminders: {e}")
+        return []
+
+# API Routes for reminder management
+@app.route('/api/admin/schedule-reminders/<int:round_id>', methods=['POST'])
+@admin_required
+def schedule_reminders_for_round(round_id):
+    """Admin endpoint to manually schedule reminders for a round"""
+    try:
+        reminders_created = ReminderSchedule.create_reminders_for_round(round_id)
+        return jsonify({
+            'success': True,
+            'message': f'Created {reminders_created} reminders',
+            'reminders_created': reminders_created
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/admin/due-reminders')
+@admin_required
+def get_due_reminders_api():
+    """Get all due reminders ready for manual sending"""
+    try:
+        reminder_data = get_due_reminders()
+        return jsonify({
+            'success': True,
+            'due_reminders': reminder_data,
+            'count': len(reminder_data)
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/admin/mark-reminder-sent/<int:reminder_id>', methods=['POST'])
+@admin_required
+def mark_reminder_sent(reminder_id):
+    """Mark a reminder as sent after manual WhatsApp sending"""
+    try:
+        reminder = ReminderSchedule.query.get(reminder_id)
+        if not reminder:
+            return jsonify({'success': False, 'error': 'Reminder not found'}), 404
+        
+        reminder.mark_as_sent()
+        return jsonify({
+            'success': True,
+            'message': 'Reminder marked as sent'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/reminders-dashboard')
+@admin_required
+def reminders_dashboard():
+    """Admin page for managing reminders"""
+    current_round = Round.query.filter_by(status='active').first()
+    return render_template('reminders_dashboard.html', current_round=current_round)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+
+{% block title %}Reminders Dashboard - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12 d-flex justify-content-between align-items-center mb-4">
+            <h1 class="h2">Reminders Dashboard</h1>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-secondary" onclick="refreshReminders()">
+                    <i class="fas fa-sync"></i> Refresh
+                </button>
+                <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-primary">
+                    <i class="fas fa-arrow-left"></i> Back to Dashboard
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Current Round Info -->
+    {% if current_round %}
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-clock"></i> 
+                        Round {{ current_round.round_number }} - PL Matchday {{ current_round.pl_matchday }}
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center">
+                        <div class="col-md-4">
+                            <h6>Status</h6>
+                            <span class="badge bg-{{ 'success' if current_round.status == 'active' else 'warning' }} fs-6">
+                                {{ current_round.status.title() }}
+                            </span>
+                        </div>
+                        {% if current_round.end_date %}
+                        <div class="col-md-4">
+                            <h6>Deadline</h6>
+                            <p class="mb-0">{{ current_round.end_date.strftime('%d %b %Y, %H:%M') }}</p>
+                        </div>
+                        <div class="col-md-4">
+                            <button class="btn btn-success btn-sm" onclick="scheduleReminders({{ current_round.id }})">
+                                <i class="fas fa-plus"></i> Schedule Reminders
+                            </button>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Due Reminders Section -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="fas fa-bell text-warning"></i> 
+                        Due Reminders (Ready to Send)
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div id="dueRemindersContainer">
+                        <div class="text-center">
+                            <div class="spinner-border" role="status"></div>
+                            <p class="mt-2">Loading due reminders...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.reminder-card {
+    border-left: 4px solid #ffc107;
+    transition: all 0.3s ease;
+}
+
+.reminder-card:hover {
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.reminder-4_hour {
+    border-left-color: #17a2b8;
+}
+
+.reminder-1_hour {
+    border-left-color: #dc3545;
+}
+
+.reminder-sent {
+    opacity: 0.6;
+    border-left-color: #28a745;
+}
+
+.whatsapp-btn {
+    background-color: #25D366;
+    border-color: #25D366;
+    color: white;
+}
+
+.whatsapp-btn:hover {
+    background-color: #128C7E;
+    border-color: #128C7E;
+    color: white;
+}
+
+@media (max-width: 768px) {
+    .reminder-actions {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    .reminder-actions .btn {
+        width: 100%;
+    }
+}
+</style>
+
+<script>
+let reminderData = [];
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadDueReminders();
+});
+
+async function loadDueReminders() {
+    try {
+        const response = await fetch('/api/admin/due-reminders');
+        const data = await response.json();
+        
+        if (data.success) {
+            reminderData = data.due_reminders;
+            renderDueReminders(data.due_reminders);
+        } else {
+            showError('Failed to load due reminders');
+        }
+    } catch (error) {
+        console.error('Error loading due reminders:', error);
+        showError('Error loading due reminders');
+    }
+}
+
+function renderDueReminders(reminders) {
+    const container = document.getElementById('dueRemindersContainer');
+    
+    if (reminders.length === 0) {
+        container.innerHTML = `
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle me-2"></i>
+                No due reminders at this time. Reminders will appear here when they're scheduled for sending.
+            </div>
+        `;
+        return;
+    }
+    
+    let html = '<div class="row">';
+    
+    reminders.forEach(reminder => {
+        const scheduledDate = new Date(reminder.scheduled_time);
+        const isOverdue = new Date() > scheduledDate;
+        
+        html += `
+            <div class="col-12 col-lg-6 mb-3">
+                <div class="card reminder-card reminder-${reminder.reminder_type} h-100">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>${reminder.player_name}</strong>
+                            <small class="text-muted d-block">Round ${reminder.round_number}</small>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge bg-${reminder.reminder_type === '4_hour' ? 'info' : 'danger'}">
+                                ${reminder.reminder_type === '4_hour' ? '4 Hour' : '1 Hour'} Reminder
+                            </span>
+                            ${isOverdue ? '<br><small class="text-danger">OVERDUE</small>' : ''}
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <small class="text-muted">
+                                <i class="fas fa-clock"></i> 
+                                Scheduled: ${scheduledDate.toLocaleString()}
+                            </small>
+                            <br>
+                            <small class="text-muted">
+                                <i class="fas fa-phone"></i> 
+                                ${reminder.whatsapp_number}
+                            </small>
+                        </div>
+                        
+                        <div class="reminder-actions d-flex gap-2">
+                            <a href="${reminder.whatsapp_link}" 
+                               class="btn btn-sm whatsapp-btn flex-fill" 
+                               target="_blank"
+                               onclick="markReminderSent(${reminder.reminder_id})">
+                                <i class="fab fa-whatsapp me-1"></i> 
+                                Send WhatsApp
+                            </a>
+                            <button class="btn btn-sm btn-outline-secondary" 
+                                    onclick="showReminderMessage(${reminder.reminder_id})">
+                                <i class="fas fa-eye"></i> 
+                                Preview
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+async function scheduleReminders(roundId) {
+    try {
+        const response = await fetch(`/api/admin/schedule-reminders/${roundId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            alert(`Successfully created ${data.reminders_created} reminders`);
+            loadDueReminders(); // Refresh the list
+        } else {
+            alert(`Error: ${data.error}`);
+        }
+    } catch (error) {
+        console.error('Error scheduling reminders:', error);
+        alert('Error scheduling reminders');
+    }
+}
+
+async function markReminderSent(reminderId) {
+    try {
+        const response = await fetch(`/api/admin/mark-reminder-sent/${reminderId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // Remove the reminder from the display
+            setTimeout(() => {
+                loadDueReminders(); // Refresh after a short delay
+            }, 1000);
+        }
+    } catch (error) {
+        console.error('Error marking reminder as sent:', error);
+    }
+}
+
+function showReminderMessage(reminderId) {
+    const reminder = reminderData.find(r => r.reminder_id === reminderId);
+    if (reminder) {
+        alert(reminder.message);
+    }
+}
+
+function refreshReminders() {
+    loadDueReminders();
+}
+
+function showError(message) {
+    const container = document.getElementById('dueRemindersContainer');
+    container.innerHTML = `<div class="alert alert-danger">${message}</div>`;
+}
+</script>
+{% endblock %}
