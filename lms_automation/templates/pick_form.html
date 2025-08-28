@@ -10,10 +10,22 @@
                 <h4 class="mb-0">Make Your Pick - Round {{ round.round_number }}</h4>
             </div>
             <div class="card-body">
-                <div class="alert alert-info">
-                    <strong>Welcome, {{ player.name }}!</strong><br>
-                    Select the team you think will WIN their match this round. Remember: you can only pick each team once throughout the competition.
-                </div>
+                {% if existing_pick %}
+                    <div class="alert alert-warning">
+                        <strong>Editing Your Pick</strong><br>
+                        You previously picked <strong>{{ existing_pick.team_picked }}</strong>. You can change your pick 
+                        {% if edits_remaining > 0 %}
+                            <strong>{{ edits_remaining }} more time{{ 's' if edits_remaining != 1 else '' }}</strong>.
+                        {% else %}
+                            <strong>no more times</strong>.
+                        {% endif %}
+                    </div>
+                {% else %}
+                    <div class="alert alert-info">
+                        <strong>Welcome, {{ player.name }}!</strong><br>
+                        Select the team you think will WIN their match this round. Remember: you can only pick each team once throughout the competition.
+                    </div>
+                {% endif %}
 
                 {% if error %}
                     <div class="alert alert-danger">
@@ -44,7 +56,8 @@
                                                     <input class="form-check-input" type="radio" name="team_picked" 
                                                            value="{{ fixture.home_team }}" 
                                                            id="home_{{ fixture.id }}"
-                                                           {% if fixture.home_team in used_teams %}disabled{% endif %}>
+                                                           {% if fixture.home_team in used_teams and (not existing_pick or existing_pick.team_picked != fixture.home_team) %}disabled{% endif %}
+                                                           {% if existing_pick and existing_pick.team_picked == fixture.home_team %}checked{% endif %}>
                                                     <label class="form-check-label {% if fixture.home_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
                                                            for="home_{{ fixture.id }}">
                                                         <strong class="{% if fixture.home_team in used_teams %}text-secondary{% endif %}">{{ fixture.home_team }}</strong> (Home)
@@ -63,7 +76,8 @@
                                                     <input class="form-check-input" type="radio" name="team_picked" 
                                                            value="{{ fixture.away_team }}" 
                                                            id="away_{{ fixture.id }}"
-                                                           {% if fixture.away_team in used_teams %}disabled{% endif %}>
+                                                           {% if fixture.away_team in used_teams and (not existing_pick or existing_pick.team_picked != fixture.away_team) %}disabled{% endif %}
+                                                           {% if existing_pick and existing_pick.team_picked == fixture.away_team %}checked{% endif %}>
                                                     <label class="form-check-label {% if fixture.away_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
                                                            for="away_{{ fixture.id }}">
                                                         <strong class="{% if fixture.away_team in used_teams %}text-secondary{% endif %}">{{ fixture.away_team }}</strong> (Away)
@@ -90,7 +104,9 @@
                     {% endif %}
 
                     <div class="text-center">
-                        <button type="submit" class="btn btn-primary btn-lg">Submit My Pick</button>
+                        <button type="submit" class="btn btn-primary btn-lg">
+                            {% if existing_pick %}Update My Pick{% else %}Submit My Pick{% endif %}
+                        </button>
                     </div>
                 </form>
             </div>

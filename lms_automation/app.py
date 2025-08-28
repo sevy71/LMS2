@@ -1229,12 +1229,18 @@ def make_pick(token):
     
     # Check if player already has a pick for this round
     existing_pick = Pick.query.filter_by(player_id=player.id, round_id=round_obj.id).first()
-    if existing_pick:
+    can_edit = pick_token.edit_count < 2
+    edits_remaining = 2 - pick_token.edit_count
+    
+    # If pick exists but token has no more edits, show read-only success page
+    if existing_pick and not can_edit:
         return render_template('pick_success.html', 
                              player=player, 
                              round=round_obj, 
                              team_picked=existing_pick.team_picked,
-                             already_picked=True)
+                             already_picked=True,
+                             can_edit=False,
+                             edits_remaining=0)
     
     # Get fixtures for this round
     fixtures = Fixture.query.filter_by(round_id=round_obj.id).all()
@@ -1290,14 +1296,22 @@ def make_pick(token):
                                  used_teams=used_teams,
                                  error="Invalid team selection")
         
-        # Create the pick
-        pick = Pick(
-            player_id=player.id,
-            round_id=round_obj.id,
-            team_picked=team_picked
-        )
+        # Create or update the pick
+        if existing_pick:
+            # Update existing pick
+            existing_pick.team_picked = team_picked
+            existing_pick.last_edited_at = datetime.utcnow()
+            is_new_pick = False
+        else:
+            # Create new pick
+            pick = Pick(
+                player_id=player.id,
+                round_id=round_obj.id,
+                team_picked=team_picked
+            )
+            db.session.add(pick)
+            is_new_pick = True
         
-        db.session.add(pick)
         pick_token.mark_used()
         db.session.commit()
         
@@ -1305,14 +1319,19 @@ def make_pick(token):
                              player=player, 
                              round=round_obj, 
                              team_picked=team_picked,
-                             already_picked=False)
+                             already_picked=not is_new_pick,
+                             can_edit=pick_token.edit_count < 2,
+                             edits_remaining=2 - pick_token.edit_count)
     
     # GET request - show the pick form
     return render_template('pick_form.html', 
                          player=player, 
                          round=round_obj, 
                          fixtures=fixtures, 
-                         used_teams=used_teams)
+                         used_teams=used_teams,
+                         existing_pick=existing_pick,
+                         can_edit=can_edit,
+                         edits_remaining=edits_remaining)
 
 @app.route('/register')
 def player_registration():

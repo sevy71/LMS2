@@ -9,7 +9,7 @@
             <div class="card-header bg-success text-white text-center">
                 <h4 class="mb-0">
                     <i class="fas fa-check-circle me-2"></i>
-                    {% if already_picked %}Pick Already Submitted{% else %}Pick Submitted Successfully!{% endif %}
+                    {% if already_picked %}Pick Updated Successfully!{% else %}Pick Submitted Successfully!{% endif %}
                 </h4>
             </div>
             <div class="card-body text-center py-5">
@@ -24,15 +24,22 @@
                 </div>
 
                 {% if already_picked %}
-                    <p class="text-muted">
-                        You had already submitted your pick for this round. 
-                        You cannot change your selection once submitted.
+                    <p class="text-success mb-4">
+                        <i class="fas fa-edit me-2"></i>
+                        Your pick has been updated! You will be notified of the results after all matches are completed.
                     </p>
                 {% else %}
                     <p class="text-success mb-4">
                         <i class="fas fa-thumbs-up me-2"></i>
                         Your pick has been recorded! You will be notified of the results after all matches are completed.
                     </p>
+                {% endif %}
+                
+                {% if edits_remaining is defined and edits_remaining > 0 %}
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>
+                        You can still change this pick <strong>{{ edits_remaining }} more time{{ 's' if edits_remaining != 1 else '' }}</strong> using this same link.
+                    </div>
                 {% endif %}
 
                 <div class="mt-4">
@@ -54,7 +61,11 @@
             </div>
             <div class="card-footer text-center">
                 <small class="text-muted">
-                    This pick link has been used and is no longer valid.
+                    {% if can_edit is defined and can_edit %}
+                        This link can be used {{ edits_remaining }} more time{{ 's' if edits_remaining != 1 else '' }}.
+                    {% else %}
+                        This pick link is no longer valid.
+                    {% endif %}
                 </small>
             </div>
         </div>
