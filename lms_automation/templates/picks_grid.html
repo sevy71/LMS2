@@ -115,11 +115,42 @@
     text-align: center;
     font-size: 0.875rem;
     position: relative;
-    cursor: col-resize;
+    user-select: none;
 }
 
 .header-cell:hover {
     background: #d6d9dc;
+}
+
+.header-cell::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+}
+
+.header-cell:hover::after {
+    background: rgba(0, 123, 255, 0.3);
+}
+
+.resize-handle {
+    position: absolute;
+    top: 0;
+    right: -2px;
+    width: 4px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+    z-index: 10;
+}
+
+.resize-handle:hover,
+.resize-handle.dragging {
+    background: rgba(0, 123, 255, 0.5);
 }
 
 /* Frozen Name Column */
@@ -144,10 +175,15 @@
     background: white;
     font-weight: 600;
     font-size: 0.875rem;
+    height: 45px;
     min-height: 45px;
+    max-height: 45px;
     display: flex;
     align-items: center;
     position: relative;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Data Grid */
@@ -161,11 +197,13 @@
     grid-auto-columns: 120px;
     grid-auto-flow: column;
     border-bottom: 1px solid #dee2e6;
+    height: 45px;
     min-height: 45px;
+    max-height: 45px;
 }
 
 .data-cell {
-    padding: 10px 8px;
+    padding: 8px 6px;
     border-right: 1px solid #dee2e6;
     text-align: center;
     font-size: 0.875rem;
@@ -174,6 +212,12 @@
     justify-content: center;
     position: relative;
     background: white;
+    height: 45px;
+    min-height: 45px;
+    max-height: 45px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Alternating row colors */
@@ -362,10 +406,16 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Headers
         gridHtml += '<div class="grid-headers">';
-        rounds.forEach(roundNumber => {
-            gridHtml += `<div class="header-cell" data-round="${roundNumber}">R${roundNumber}</div>`;
+        rounds.forEach((roundNumber, index) => {
+            gridHtml += `<div class="header-cell" data-round="${roundNumber}" data-col-index="${index}">
+                R${roundNumber}
+                <div class="resize-handle" data-col-index="${index}"></div>
+            </div>`;
         });
-        gridHtml += '<div class="header-cell">Status</div>';
+        gridHtml += `<div class="header-cell" data-col-index="${rounds.length}">
+            Status
+            <div class="resize-handle" data-col-index="${rounds.length}"></div>
+        </div>`;
         gridHtml += '</div>';
         
         // Name column
@@ -419,6 +469,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Sync scrolling between headers and data
         syncScrolling();
+        
+        // Setup column resizing
+        setupColumnResizing();
     }
 
     function syncScrolling() {
@@ -442,6 +495,100 @@ document.addEventListener('DOMContentLoaded', function() {
         names.addEventListener('scroll', function() {
             dataGrid.scrollTop = names.scrollTop;
         });
+    }
+
+    function setupColumnResizing() {
+        const resizeHandles = document.querySelectorAll('.resize-handle');
+        let isResizing = false;
+        let currentHandle = null;
+        let startX = 0;
+        let startWidth = 0;
+        let columnWidths = [];
+
+        // Initialize column widths
+        const headers = document.querySelectorAll('.header-cell');
+        headers.forEach((header, index) => {
+            columnWidths[index] = 120; // Default width
+        });
+
+        resizeHandles.forEach(handle => {
+            handle.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                isResizing = true;
+                currentHandle = this;
+                startX = e.clientX;
+                
+                const colIndex = parseInt(this.getAttribute('data-col-index'));
+                startWidth = columnWidths[colIndex] || 120;
+                
+                this.classList.add('dragging');
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+            });
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!isResizing || !currentHandle) return;
+            
+            e.preventDefault();
+            const deltaX = e.clientX - startX;
+            const colIndex = parseInt(currentHandle.getAttribute('data-col-index'));
+            const newWidth = Math.max(80, startWidth + deltaX); // Minimum 80px
+            
+            columnWidths[colIndex] = newWidth;
+            applyColumnWidth(colIndex, newWidth);
+        });
+
+        document.addEventListener('mouseup', function(e) {
+            if (isResizing) {
+                isResizing = false;
+                if (currentHandle) {
+                    currentHandle.classList.remove('dragging');
+                    currentHandle = null;
+                }
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+        });
+
+        function applyColumnWidth(colIndex, width) {
+            // Update header
+            const header = document.querySelector(`[data-col-index="${colIndex}"]`);
+            if (header) {
+                header.style.width = width + 'px';
+                header.style.minWidth = width + 'px';
+            }
+
+            // Update all data cells in this column
+            const dataRows = document.querySelectorAll('.data-row');
+            dataRows.forEach(row => {
+                const cells = row.querySelectorAll('.data-cell');
+                if (cells[colIndex]) {
+                    cells[colIndex].style.width = width + 'px';
+                    cells[colIndex].style.minWidth = width + 'px';
+                }
+            });
+
+            // Update grid template columns for the headers and data rows
+            updateGridColumnWidths(columnWidths);
+        }
+
+        function updateGridColumnWidths(widths) {
+            const gridTemplate = widths.map(w => `${w}px`).join(' ');
+            
+            const headers = document.querySelector('.grid-headers');
+            const dataRows = document.querySelectorAll('.data-row');
+            
+            if (headers) {
+                headers.style.gridTemplateColumns = gridTemplate;
+            }
+            
+            dataRows.forEach(row => {
+                row.style.gridTemplateColumns = gridTemplate;
+            });
+        }
     }
 
     function getPickInfo(pickData, roundNumber) {
