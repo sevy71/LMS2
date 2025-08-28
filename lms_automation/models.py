@@ -62,7 +62,7 @@ class Pick(db.Model):
     is_winner = db.Column(db.Boolean, nullable=True)  # None=pending, True=won, False=lost
     is_eliminated = db.Column(db.Boolean, default=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    # last_edited_at = db.Column(db.DateTime, nullable=True)  # Temporarily disabled
+    last_edited_at = db.Column(db.DateTime, nullable=True)
     
     def __repr__(self):
         return f'<Pick {self.player.name} - {self.team_picked}>'
@@ -75,7 +75,7 @@ class PickToken(db.Model):
     round_id = db.Column(db.Integer, db.ForeignKey('rounds.id'), nullable=False)
     token = db.Column(db.String(64), nullable=False, unique=True, index=True)
     is_used = db.Column(db.Boolean, default=False)
-    # edit_count = db.Column(db.Integer, default=0)  # Temporarily disabled
+    edit_count = db.Column(db.Integer, default=0)
     expires_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     used_at = db.Column(db.DateTime, nullable=True)
@@ -100,7 +100,7 @@ class PickToken(db.Model):
         existing_token = PickToken.query.filter_by(
             player_id=player_id, 
             round_id=round_id
-        ).filter(True).first()  # .filter(PickToken.edit_count < 2) temporarily disabled
+        ).filter(PickToken.edit_count < 2).first()
         
         if existing_token:
             return existing_token
@@ -118,17 +118,18 @@ class PickToken(db.Model):
     
     def is_valid(self):
         """Check if token is valid (not exceeded edit limit and not expired)"""
-        # if self.edit_count >= 2:
-        #     return False  # Temporarily disabled
+        if self.edit_count >= 2:
+            return False
         if self.expires_at and datetime.utcnow() > self.expires_at:
             return False
         return True
     
     def mark_used(self):
         """Increment edit count and update used_at timestamp"""
-        # self.edit_count += 1  # Temporarily disabled
+        self.edit_count += 1
         self.used_at = datetime.utcnow()
-        self.is_used = True  # Temporarily always mark as used
+        if self.edit_count >= 2:
+            self.is_used = True
     
     def get_pick_url(self, base_url='https://localhost:5000'):
         """Get the full pick URL for this token"""
