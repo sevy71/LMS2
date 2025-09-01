@@ -1299,6 +1299,140 @@ def process_round_results(round_id):
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/import-historical-picks', methods=['POST'])
+@admin_required
+def import_historical_picks():
+    """Import historical picks for rounds 1 and 2"""
+    try:
+        # Historical data from your game
+        historical_data = {
+            1: {  # Round 1 picks
+                "A. Claes": ("Chelsea", None),
+                "A. Faccini": ("West Ham", None), 
+                "A. Ferguson": ("Spurs", True),
+                "A. Frost": ("Liverpool", True),
+                "A. Shooter": ("Liverpool", True),
+                "A. Sirignano": ("Brighton", None),
+                "A. Symons": ("Chelsea", None),
+                "A. Urmson": ("Liverpool", True),
+                "A. Walkden": ("Forest", True),
+                "B. Wood": ("Liverpool", True),
+                "C. Harris": ("Liverpool", True),
+                "C. Hollows": ("Spurs", True),
+                "D. Brindle": ("Forest", True),
+                "D. Evans": ("Brighton", None),
+                "D. Foley": ("Arsenal", True),
+                "D. Groves": ("Liverpool", True),
+                "D. Riley": ("Everton", None),
+                "E. Sandys": ("Chelsea", None),
+                "F. Mulley": ("Man City", True),
+                "F. Warby": ("Spurs", True),
+                "G. Boyle": ("Spurs", True),
+                "G. Leigh": ("Liverpool", True),
+                "J. Burn": ("Liverpool", True),
+                "J. Lyne": ("Spurs", True),
+                "J. Vertigans": ("Forest", True),
+                "J. Winning": ("Liverpool", True),
+                "K. Cambell": ("Spurs", True),
+                "M. Prescott": ("Brighton", None),
+                "M. Waight": ("Liverpool", True),
+                "O. Riley": ("West Ham", None),
+                "P. Crockford": ("Spurs", True),
+                "P. Morrison": ("Forest", True),
+                "P. Riley": ("Liverpool", True),
+                "P. Warby": ("Forest", True),
+                "R. Amis": ("Liverpool", True),
+                "R. Burrows": ("Liverpool", True),
+                "R. Sadler": ("West Ham", None),
+                "S. Graham-Betts": ("Man City", True),
+                "S. Jones": ("Chelsea", None),
+                "S. Shooter": ("Leeds", True),
+                "S.Hall": ("Spurs", True),
+                "Sarah": ("Fulham", None),
+                "T. Leigh": ("Liverpool", True),
+                "T. Thompson": ("Chelsea", None),
+                "V. Hughes": ("Spurs", True),
+                "j. Cruickshank": ("Liverpool", True)
+            },
+            2: {  # Round 2 picks
+                "A. Ferguson": ("Man Utd", None),
+                "A. Frost": ("Arsenal", True),
+                "A. Shooter": ("Man Utd", None),
+                "A. Urmson": ("Arsenal", True),
+                "A. Walkden": ("Sunderland", None),
+                "B. Wood": ("Arsenal", True),
+                "C. Harris": ("Man Utd", None),
+                "C. Hollows": ("Arsenal", True),
+                "D. Brindle": ("Arsenal", True),
+                "D. Foley": ("Man City", None),
+                "D. Groves": ("Arsenal", True),
+                "F. Mulley": ("Villa", None),
+                "F. Warby": ("Villa", None),
+                "G. Boyle": ("Chelsea", True),
+                "G. Leigh": ("Arsenal", True),
+                "J. Burn": ("Arsenal", True),
+                "J. Lyne": ("Liverpool", True),
+                "J. Vertigans": ("Chelsea", True),
+                "J. Winning": ("Chelsea", True),
+                "K. Cambell": ("Sunderland", None),
+                "M. Waight": ("Chelsea", True),
+                "P. Crockford": ("Man Utd", None),
+                "P. Morrison": ("Villa", None),
+                "P. Riley": ("Arsenal", True),
+                "P. Warby": ("Arsenal", True),
+                "R. Amis": ("Arsenal", True),
+                "R. Burrows": ("Arsenal", True),
+                "S. Graham-Betts": ("Man Utd", None),
+                "S. Shooter": ("Liverpool", True),
+                "S.Hall": ("Chelsea", True),
+                "T. Leigh": ("Arsenal", True),
+                "V. Hughes": ("Arsenal", True),
+                "j. Cruickshank": ("Arsenal", True)
+            }
+        }
+        
+        imported_count = 0
+        
+        for round_num, picks_data in historical_data.items():
+            round_obj = Round.query.filter_by(round_number=round_num).first()
+            if not round_obj:
+                continue
+                
+            for player_name, (team, is_winner) in picks_data.items():
+                player = Player.query.filter_by(name=player_name).first()
+                if not player:
+                    continue
+                
+                # Check if pick already exists
+                existing_pick = Pick.query.filter_by(player_id=player.id, round_id=round_obj.id).first()
+                if existing_pick:
+                    continue
+                
+                # Create the pick using raw SQL to avoid schema issues
+                db.session.execute(db.text(
+                    "INSERT INTO picks (player_id, round_id, team_picked, is_winner, is_eliminated) "
+                    "VALUES (:player_id, :round_id, :team_picked, :is_winner, :is_eliminated)"
+                ), {
+                    "player_id": player.id,
+                    "round_id": round_obj.id, 
+                    "team_picked": team,
+                    "is_winner": is_winner,
+                    "is_eliminated": False if is_winner else (True if is_winner is False else False)
+                })
+                imported_count += 1
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully imported {imported_count} historical picks',
+            'imported_count': imported_count
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/debug-used-teams/<int:player_id>')
 @admin_required  
 def debug_used_teams(player_id):
