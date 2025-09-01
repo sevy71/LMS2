@@ -1304,26 +1304,26 @@ def process_round_results(round_id):
 def emergency_delete_round4():
     """Emergency endpoint to delete Round 4 with all related data"""
     try:
-        round4 = Round.query.filter_by(round_number=4).first()
-        if not round4:
+        # Use raw SQL to avoid model issues
+        result = db.session.execute(db.text("SELECT id FROM rounds WHERE round_number = 4"))
+        round4_row = result.fetchone()
+        
+        if not round4_row:
             return jsonify({'success': False, 'error': 'Round 4 not found'}), 404
         
-        # Delete in correct order
-        tokens_deleted = PickToken.query.filter_by(round_id=round4.id).delete()
-        picks_deleted = Pick.query.filter_by(round_id=round4.id).delete()
-        fixtures_deleted = Fixture.query.filter_by(round_id=round4.id).delete()
+        round4_id = round4_row[0]
         
-        db.session.delete(round4)
+        # Delete in correct order using raw SQL
+        db.session.execute(db.text("DELETE FROM pick_tokens WHERE round_id = :round_id"), {"round_id": round4_id})
+        db.session.execute(db.text("DELETE FROM picks WHERE round_id = :round_id"), {"round_id": round4_id})
+        db.session.execute(db.text("DELETE FROM fixtures WHERE round_id = :round_id"), {"round_id": round4_id})
+        db.session.execute(db.text("DELETE FROM rounds WHERE id = :round_id"), {"round_id": round4_id})
+        
         db.session.commit()
         
         return jsonify({
             'success': True,
-            'message': 'Round 4 emergency deleted successfully',
-            'deleted': {
-                'fixtures': fixtures_deleted,
-                'picks': picks_deleted,
-                'tokens': tokens_deleted
-            }
+            'message': 'Round 4 emergency deleted successfully using raw SQL'
         })
         
     except Exception as e:
