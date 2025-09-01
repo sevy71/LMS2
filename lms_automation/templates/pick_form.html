@@ -44,7 +44,7 @@
                         <div class="row">
                             {% for fixture in fixtures %}
                                 <div class="col-12 col-sm-6 col-lg-6 mb-3">
-                                    <div class="card h-100 {% if fixture.home_team in used_teams and fixture.away_team in used_teams %}opacity-50{% endif %}">
+                                    <div class="card h-100 {% if is_team_used(fixture.home_team) and is_team_used(fixture.away_team) %}opacity-50{% endif %}">
                                         <div class="card-body p-2 p-sm-3">
                                             <div class="fixture-info mb-2">
                                                 {% if fixture.date %}
@@ -62,15 +62,15 @@
                                                            value="{{ fixture.home_team }}" 
                                                            id="home_{{ fixture.id }}"
                                                            style="transform: scale(1.2);"
-                                                           {% if fixture.home_team in used_teams and (not existing_pick or existing_pick.team_picked != fixture.home_team) %}disabled{% endif %}
+                                                           {% if is_team_used(fixture.home_team) and (not existing_pick or existing_pick.team_picked != fixture.home_team) %}disabled{% endif %}
                                                            {% if existing_pick and existing_pick.team_picked == fixture.home_team %}checked{% endif %}>
-                                                    <label class="form-check-label flex-grow-1 {% if fixture.home_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
+                                                    <label class="form-check-label flex-grow-1 {% if is_team_used(fixture.home_team) %}text-muted text-decoration-line-through{% endif %}" 
                                                            for="home_{{ fixture.id }}" style="cursor: pointer; user-select: none;">
                                                         <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start">
-                                                            <strong class="{% if fixture.home_team in used_teams %}text-secondary{% else %}text-dark{% endif %}">{{ fixture.home_team }}</strong>
+                                                            <strong class="{% if is_team_used(fixture.home_team) %}text-secondary{% else %}text-dark{% endif %}">{{ fixture.home_team }}</strong>
                                                             <small class="text-muted">(Home)</small>
                                                         </div>
-                                                        {% if fixture.home_team in used_teams %}
+                                                        {% if is_team_used(fixture.home_team) %}
                                                             <small class="text-danger fw-bold d-block">(ALREADY USED ❌)</small>
                                                         {% endif %}
                                                     </label>
@@ -87,15 +87,15 @@
                                                            value="{{ fixture.away_team }}" 
                                                            id="away_{{ fixture.id }}"
                                                            style="transform: scale(1.2);"
-                                                           {% if fixture.away_team in used_teams and (not existing_pick or existing_pick.team_picked != fixture.away_team) %}disabled{% endif %}
+                                                           {% if is_team_used(fixture.away_team) and (not existing_pick or existing_pick.team_picked != fixture.away_team) %}disabled{% endif %}
                                                            {% if existing_pick and existing_pick.team_picked == fixture.away_team %}checked{% endif %}>
-                                                    <label class="form-check-label flex-grow-1 {% if fixture.away_team in used_teams %}text-muted text-decoration-line-through{% endif %}" 
+                                                    <label class="form-check-label flex-grow-1 {% if is_team_used(fixture.away_team) %}text-muted text-decoration-line-through{% endif %}" 
                                                            for="away_{{ fixture.id }}" style="cursor: pointer; user-select: none;">
                                                         <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start">
-                                                            <strong class="{% if fixture.away_team in used_teams %}text-secondary{% else %}text-dark{% endif %}">{{ fixture.away_team }}</strong>
+                                                            <strong class="{% if is_team_used(fixture.away_team) %}text-secondary{% else %}text-dark{% endif %}">{{ fixture.away_team }}</strong>
                                                             <small class="text-muted">(Away)</small>
                                                         </div>
-                                                        {% if fixture.away_team in used_teams %}
+                                                        {% if is_team_used(fixture.away_team) %}
                                                             <small class="text-danger fw-bold d-block">(ALREADY USED ❌)</small>
                                                         {% endif %}
                                                     </label>

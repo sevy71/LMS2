@@ -1553,6 +1553,28 @@ def make_pick(token):
     previous_picks = Pick.query.filter_by(player_id=player.id).all()
     used_teams = [pick.team_picked for pick in previous_picks]
     
+    # Create a normalized team matching function to handle name variations
+    def normalize_team_name(team_name):
+        """Normalize team names for comparison"""
+        if not team_name:
+            return ""
+        # Remove common suffixes and normalize
+        normalized = team_name.lower()
+        normalized = normalized.replace(' fc', '').replace(' afc', '').replace(' united fc', '')
+        normalized = normalized.replace('tottenham hotspur', 'spurs').replace('nottingham forest', 'forest')
+        normalized = normalized.replace('wolverhampton wanderers', 'wolves')
+        normalized = normalized.replace('brighton & hove albion', 'brighton')
+        normalized = normalized.replace('afc bournemouth', 'bournemouth')
+        normalized = normalized.replace('west ham united', 'west ham')
+        return normalized.strip()
+    
+    # Create a set of normalized used team names for faster lookup
+    normalized_used_teams = {normalize_team_name(team) for team in used_teams}
+    
+    # Function to check if a team is already used
+    def is_team_used(fixture_team_name):
+        return normalize_team_name(fixture_team_name) in normalized_used_teams
+    
     # Debug logging for team availability
     all_teams = []
     for fixture in fixtures:
@@ -1572,14 +1594,16 @@ def make_pick(token):
                                  round=round_obj, 
                                  fixtures=fixtures, 
                                  used_teams=used_teams,
+                                 is_team_used=is_team_used,
                                  error="Please select a team")
         
-        if team_picked in used_teams:
+        if is_team_used(team_picked):
             return render_template('pick_form.html', 
                                  player=player, 
                                  round=round_obj, 
                                  fixtures=fixtures, 
                                  used_teams=used_teams,
+                                 is_team_used=is_team_used,
                                  error="You have already picked this team in a previous round")
         
         # Validate team exists in fixtures
@@ -1593,6 +1617,7 @@ def make_pick(token):
                                  round=round_obj, 
                                  fixtures=fixtures, 
                                  used_teams=used_teams,
+                                 is_team_used=is_team_used,
                                  error="Invalid team selection")
         
         # Create or update the pick
@@ -1632,7 +1657,8 @@ def make_pick(token):
                          existing_pick=existing_pick,
                          can_edit=can_edit,
                          edits_remaining=edits_remaining,
-                         token=token)
+                         token=token,
+                         is_team_used=is_team_used)
 
 @app.route('/register')
 def player_registration():
