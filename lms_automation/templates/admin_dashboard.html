@@ -158,6 +158,19 @@
             </div>
         </div>
     </div>
+    
+    <div class="col-lg-4 col-md-6 mb-4">
+        <div class="card border-warning shadow-sm h-100">
+            <div class="card-body text-center p-4">
+                <i class="fas fa-cog text-warning fa-2x mb-3"></i>
+                <h5 class="card-title">Manage Rounds</h5>
+                <p class="card-text text-muted small">View, activate, or delete existing rounds</p>
+                <button class="btn btn-warning btn-lg w-100" data-bs-toggle="modal" data-bs-target="#manageRoundsModal">
+                    <i class="fas fa-cog me-2"></i>Manage Rounds
+                </button>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- SECONDARY ACTIONS - Regular Use -->
@@ -610,6 +623,26 @@
                     <button type="submit" class="btn btn-success">Create Round</button>
                 </div>
             </form>
+        </div>
+    </div>
+</div>
+
+<!-- Manage Rounds Modal -->
+<div class="modal fade" id="manageRoundsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Manage Rounds</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="roundsList">
+                    Loading rounds...
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
         </div>
     </div>
 </div>
@@ -1869,6 +1902,128 @@ document.addEventListener('DOMContentLoaded', function() {
     // Re-attach event listeners after sorting
     function attachPlayerEventListeners() {
         // Implementation here...
+    }
+    
+    // Load rounds when manage rounds modal opens
+    document.getElementById('manageRoundsModal').addEventListener('show.bs.modal', function() {
+        const roundsList = document.getElementById('roundsList');
+        roundsList.innerHTML = 'Loading rounds...';
+        
+        fetch('/api/rounds')
+            .then(response => response.json())
+            .then(data => {
+                let html = '';
+                if (data.length === 0) {
+                    html = '<p class="text-muted">No rounds found</p>';
+                } else {
+                    html = '<div class="list-group">';
+                    data.forEach(round => {
+                        const statusBadge = round.status === 'active' ? 'bg-success' : 
+                                          round.status === 'pending' ? 'bg-warning' : 'bg-secondary';
+                        
+                        html += `
+                            <div class="list-group-item d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h6 class="mb-1">Round ${round.round_number}</h6>
+                                    <small class="text-muted">PL Matchday ${round.pl_matchday || 'N/A'}</small>
+                                    <span class="badge ${statusBadge} ms-2">${round.status}</span>
+                                </div>
+                                <div class="btn-group" role="group">
+                                    ${round.status !== 'active' ? `
+                                        <button class="btn btn-sm btn-outline-success activate-round-btn" data-round-id="${round.id}" data-round-number="${round.round_number}">
+                                            <i class="fas fa-play"></i> Activate
+                                        </button>
+                                    ` : ''}
+                                    <button class="btn btn-sm btn-outline-danger delete-round-btn" data-round-id="${round.id}" data-round-number="${round.round_number}">
+                                        <i class="fas fa-trash"></i> Delete
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                }
+                roundsList.innerHTML = html;
+                
+                // Attach event listeners for activate and delete buttons
+                attachRoundManagementListeners();
+            })
+            .catch(error => {
+                roundsList.innerHTML = '<p class="text-danger">Error loading rounds: ' + error + '</p>';
+            });
+    });
+    
+    function attachRoundManagementListeners() {
+        // Activate round buttons
+        document.querySelectorAll('.activate-round-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const roundId = this.dataset.roundId;
+                const roundNumber = this.dataset.roundNumber;
+                
+                if (confirm(`Activate Round ${roundNumber}? This will deactivate any other active rounds.`)) {
+                    this.disabled = true;
+                    this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Activating...';
+                    
+                    fetch(`/api/rounds/${roundId}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({status: 'active'})
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert(`Round ${roundNumber} activated successfully!`);
+                            // Reload the modal content
+                            document.getElementById('manageRoundsModal').dispatchEvent(new Event('show.bs.modal'));
+                        } else {
+                            alert('Error activating round: ' + data.error);
+                            this.disabled = false;
+                            this.innerHTML = '<i class="fas fa-play"></i> Activate';
+                        }
+                    })
+                    .catch(error => {
+                        alert('Error activating round: ' + error);
+                        this.disabled = false;
+                        this.innerHTML = '<i class="fas fa-play"></i> Activate';
+                    });
+                }
+            });
+        });
+        
+        // Delete round buttons
+        document.querySelectorAll('.delete-round-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const roundId = this.dataset.roundId;
+                const roundNumber = this.dataset.roundNumber;
+                
+                if (confirm(`Delete Round ${roundNumber}? This will permanently delete the round and all its fixtures. This cannot be undone.`)) {
+                    this.disabled = true;
+                    this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+                    
+                    fetch(`/api/rounds/${roundId}`, {
+                        method: 'DELETE',
+                        headers: {'Content-Type': 'application/json'}
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert(`Round ${roundNumber} deleted successfully!`);
+                            // Reload the modal content
+                            document.getElementById('manageRoundsModal').dispatchEvent(new Event('show.bs.modal'));
+                        } else {
+                            alert('Error deleting round: ' + data.error);
+                            this.disabled = false;
+                            this.innerHTML = '<i class="fas fa-trash"></i> Delete';
+                        }
+                    })
+                    .catch(error => {
+                        alert('Error deleting round: ' + error);
+                        this.disabled = false;
+                        this.innerHTML = '<i class="fas fa-trash"></i> Delete';
+                    });
+                }
+            });
+        });
     }
 });
 
