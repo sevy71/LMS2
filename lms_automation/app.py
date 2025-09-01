@@ -1299,6 +1299,37 @@ def process_round_results(round_id):
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/emergency-delete-round4', methods=['POST'])
+@admin_required
+def emergency_delete_round4():
+    """Emergency endpoint to delete Round 4 with all related data"""
+    try:
+        round4 = Round.query.filter_by(round_number=4).first()
+        if not round4:
+            return jsonify({'success': False, 'error': 'Round 4 not found'}), 404
+        
+        # Delete in correct order
+        tokens_deleted = PickToken.query.filter_by(round_id=round4.id).delete()
+        picks_deleted = Pick.query.filter_by(round_id=round4.id).delete()
+        fixtures_deleted = Fixture.query.filter_by(round_id=round4.id).delete()
+        
+        db.session.delete(round4)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Round 4 emergency deleted successfully',
+            'deleted': {
+                'fixtures': fixtures_deleted,
+                'picks': picks_deleted,
+                'tokens': tokens_deleted
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/reset-game', methods=['POST'])
 @admin_required
 def reset_game():
