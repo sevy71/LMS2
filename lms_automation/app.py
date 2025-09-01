@@ -676,28 +676,63 @@ def get_matchday_info(matchday):
         traceback.print_exc()
         return jsonify({'success': False, 'error': f'Failed to get matchday info: {str(e)}'}), 500
 
-@app.route('/api/rounds/<int:round_id>')
+@app.route('/api/rounds/<int:round_id>', methods=['GET', 'PUT'])
 @admin_required
-def get_round_by_id(round_id):
-    """Get detailed information about a specific round"""
-    try:
-        round_obj = Round.query.get_or_404(round_id)
-        fixtures = Fixture.query.filter_by(round_id=round_id).all()
-        
-        return jsonify({
-            'success': True,
-            'round': {
-                'id': round_obj.id,
-                'round_number': round_obj.round_number,
-                'pl_matchday': round_obj.pl_matchday,
-                'status': round_obj.status,
-                'start_date': round_obj.start_date.isoformat() if round_obj.start_date else None,
-                'end_date': round_obj.end_date.isoformat() if round_obj.end_date else None,
-                'fixture_count': len(fixtures)
-            }
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+def handle_round_by_id(round_id):
+    """Get detailed information about a specific round or update its status"""
+    round_obj = Round.query.get_or_404(round_id)
+    
+    if request.method == 'GET':
+        try:
+            fixtures = Fixture.query.filter_by(round_id=round_id).all()
+            
+            return jsonify({
+                'success': True,
+                'round': {
+                    'id': round_obj.id,
+                    'round_number': round_obj.round_number,
+                    'pl_matchday': round_obj.pl_matchday,
+                    'status': round_obj.status,
+                    'start_date': round_obj.start_date.isoformat() if round_obj.start_date else None,
+                    'end_date': round_obj.end_date.isoformat() if round_obj.end_date else None,
+                    'fixture_count': len(fixtures)
+                }
+            })
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    
+    elif request.method == 'PUT':
+        try:
+            data = request.get_json()
+            new_status = data.get('status')
+            
+            if not new_status:
+                return jsonify({'success': False, 'error': 'Status is required'}), 400
+                
+            if new_status not in ['pending', 'active', 'completed']:
+                return jsonify({'success': False, 'error': 'Invalid status. Must be pending, active, or completed'}), 400
+            
+            # If activating a round, deactivate any other active rounds
+            if new_status == 'active':
+                current_active = Round.query.filter_by(status='active').first()
+                if current_active and current_active.id != round_id:
+                    current_active.status = 'completed'
+            
+            old_status = round_obj.status
+            round_obj.status = new_status
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'round_id': round_id,
+                'old_status': old_status,
+                'new_status': new_status,
+                'message': f'Round {round_obj.round_number} status updated from {old_status} to {new_status}'
+            })
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/rounds/<int:round_id>/fixtures', methods=['POST'])
 @admin_required
@@ -828,6 +863,62 @@ def get_round_picks(round_id):
         })
         
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/rounds/<int:round_id>/auto-populate-results', methods=['POST'])
+@admin_required
+def auto_populate_results(round_id):
+    """Auto-populate match results from the football API"""
+    try:
+        round_obj = Round.query.get_or_404(round_id)
+        fixtures = Fixture.query.filter_by(round_id=round_id).all()
+        
+        if not fixtures:
+            return jsonify({'success': False, 'error': 'No fixtures found for this round'}), 400
+        
+        # Get updated results from API
+        from football_api import FootballDataAPI
+        api = FootballDataAPI()
+        fixtures_data = api.get_premier_league_fixtures(round_obj.pl_matchday)
+        
+        if not fixtures_data or not fixtures_data.get('matches'):
+            return jsonify({'success': False, 'error': 'Unable to fetch results from football API'}), 500
+        
+        updated_count = 0
+        api_matches = fixtures_data['matches']
+        
+        # Update fixtures with API results
+        for fixture in fixtures:
+            # Find matching API fixture by team names
+            for api_match in api_matches:
+                if (api_match.get('homeTeam', {}).get('name') == fixture.home_team and 
+                    api_match.get('awayTeam', {}).get('name') == fixture.away_team):
+                    
+                    # Check if match is finished and has scores
+                    if api_match.get('status') == 'FINISHED':
+                        score = api_match.get('score', {})
+                        full_time = score.get('fullTime', {})
+                        home_score = full_time.get('home')
+                        away_score = full_time.get('away')
+                        
+                        if home_score is not None and away_score is not None:
+                            fixture.home_score = home_score
+                            fixture.away_score = away_score
+                            fixture.status = 'completed'
+                            updated_count += 1
+                    break
+        
+        if updated_count > 0:
+            db.session.commit()
+            
+        return jsonify({
+            'success': True,
+            'updated_fixtures': updated_count,
+            'message': f'Updated {updated_count} fixtures with results from API'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/players/<int:player_id>/status', methods=['PUT'])
@@ -1151,8 +1242,12 @@ def process_round_results(round_id):
                             pick.player.status = 'eliminated'
                             eliminated_players.append(pick.player.name)
         
-        # Mark round as completed
-        round_obj.status = 'completed'
+        # Only mark round as completed if all fixtures have been processed
+        total_fixtures = Fixture.query.filter_by(round_id=round_id).count()
+        completed_fixtures = Fixture.query.filter_by(round_id=round_id, status='completed').count()
+        
+        if completed_fixtures == total_fixtures:
+            round_obj.status = 'completed'
         
         db.session.commit()
         

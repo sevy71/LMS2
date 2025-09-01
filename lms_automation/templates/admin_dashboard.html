@@ -898,6 +898,47 @@
 
 {% block scripts %}
 <script>
+// Premier League team abbreviations mapping
+function getTeamAbbreviation(teamName) {
+    const abbreviations = {
+        'Arsenal': 'ARS',
+        'Aston Villa': 'AVFC',
+        'Aston Villa FC': 'AVFC',
+        'AFC Bournemouth': 'BOU',
+        'Bournemouth': 'BOU',
+        'Bournemouth AFC': 'BOU',
+        'Brentford': 'BRE',
+        'Brighton': 'BHA',
+        'Brighton & Hove Albion': 'BHA',
+        'Burnley': 'BUR',
+        'Chelsea': 'CHE',
+        'Crystal Palace': 'CRY',
+        'Everton': 'EVE',
+        'Everton FC': 'EVE',
+        'Fulham': 'FUL',
+        'Liverpool': 'LIV',
+        'Liverpool FC': 'LIV',
+        'Luton Town': 'LUT',
+        'Manchester City': 'MCI',
+        'Manchester City FC': 'MCI',
+        'Manchester United': 'MUN',
+        'Manchester United FC': 'MUN',
+        'Newcastle': 'NEW',
+        'Newcastle United': 'NEW',
+        'Nottingham Forest': 'NOT',
+        'Sheffield United': 'SHE',
+        'Tottenham': 'TOT',
+        'Tottenham Hotspur': 'TOT',
+        'Tottenham Hotspur FC': 'TOT',
+        'West Ham': 'WHU',
+        'West Ham United': 'WHU',
+        'Wolves': 'WOL',
+        'Wolverhampton Wanderers': 'WOL'
+    };
+    
+    return abbreviations[teamName] || teamName.substring(0, 3).toUpperCase();
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // Handle single player form submission
     document.getElementById('addPlayerForm').addEventListener('submit', function(e) {
@@ -1551,8 +1592,279 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('confirmResetBtn').disabled = true;
     });
     
-    // Similar event handlers for all other modals...
-    // (keeping the existing JavaScript functionality intact)
+    // Load rounds when Process Results modal opens
+    document.getElementById('resultsModal').addEventListener('show.bs.modal', function() {
+        const roundSelect = document.getElementById('resultsRoundSelect');
+        roundSelect.innerHTML = '<option value="">Loading rounds...</option>';
+        document.getElementById('processResultsBtn').disabled = true;
+        
+        fetch('/api/rounds')
+            .then(response => response.json())
+            .then(data => {
+                roundSelect.innerHTML = '<option value="">Select a round...</option>';
+                data.forEach(round => {
+                    const option = document.createElement('option');
+                    option.value = round.id;
+                    option.textContent = `Round ${round.round_number} (${round.status})`;
+                    roundSelect.appendChild(option);
+                });
+            })
+            .catch(error => {
+                console.error('Error loading rounds:', error);
+                roundSelect.innerHTML = '<option value="">Error loading rounds</option>';
+            });
+    });
+    
+    // Handle round selection for results
+    document.getElementById('resultsRoundSelect').addEventListener('change', function() {
+        const roundId = this.value;
+        const processBtn = document.getElementById('processResultsBtn');
+        const roundInfo = document.getElementById('resultsRoundInfo');
+        const fixturesDiv = document.getElementById('roundFixtures');
+        const picksDiv = document.getElementById('playerPicks');
+        
+        if (!roundId) {
+            processBtn.disabled = true;
+            roundInfo.innerHTML = '';
+            fixturesDiv.innerHTML = '';
+            picksDiv.innerHTML = '';
+            return;
+        }
+        
+        roundInfo.innerHTML = 'Loading round data...';
+        
+        fetch(`/api/rounds/${roundId}/picks`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const round = data.round;
+                    const fixtures = data.fixtures;
+                    const picks = data.picks;
+                    
+                    // Display round info
+                    roundInfo.innerHTML = `
+                        <div class="alert alert-info">
+                            <strong>Round ${round.round_number}</strong> - Status: <span class="badge bg-${round.status === 'active' ? 'success' : 'secondary'}">${round.status}</span><br>
+                            Fixtures: ${fixtures.length} | Player Picks: ${picks.length}
+                        </div>
+                    `;
+                    
+                    // Display fixtures with score inputs
+                    if (fixtures.length > 0) {
+                        let fixturesHtml = `
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h6 class="mb-0">Match Results</h6>
+                                <button type="button" class="btn btn-outline-primary btn-sm" id="autoPopulateBtn">
+                                    <i class="fas fa-download me-1"></i>Auto-Populate from API
+                                </button>
+                            </div>
+                            <div class="row">
+                        `;
+                        
+                        fixtures.forEach(fixture => {
+                            const homeAbbrev = getTeamAbbreviation(fixture.home_team);
+                            const awayAbbrev = getTeamAbbreviation(fixture.away_team);
+                            
+                            fixturesHtml += `
+                                <div class="col-md-6 mb-3">
+                                    <div class="card">
+                                        <div class="card-body">
+                                            <h6 title="${fixture.home_team} vs ${fixture.away_team}">${homeAbbrev} vs ${awayAbbrev}</h6>
+                                            <div class="row">
+                                                <div class="col-5">
+                                                    <label class="form-label small" title="${fixture.home_team}">${homeAbbrev}</label>
+                                                    <input type="number" class="form-control score-input" 
+                                                           data-fixture-id="${fixture.id}" 
+                                                           data-type="home"
+                                                           value="${fixture.home_score !== null ? fixture.home_score : ''}" 
+                                                           min="0" placeholder="-">
+                                                </div>
+                                                <div class="col-2 text-center pt-4">
+                                                    <strong>-</strong>
+                                                </div>
+                                                <div class="col-5">
+                                                    <label class="form-label small" title="${fixture.away_team}">${awayAbbrev}</label>
+                                                    <input type="number" class="form-control score-input" 
+                                                           data-fixture-id="${fixture.id}" 
+                                                           data-type="away"
+                                                           value="${fixture.away_score !== null ? fixture.away_score : ''}" 
+                                                           min="0" placeholder="-">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        
+                        fixturesHtml += '</div>';
+                        fixturesDiv.innerHTML = fixturesHtml;
+                    }
+                    
+                    // Display player picks
+                    if (picks.length > 0) {
+                        // Sort picks by team picked
+                        picks.sort((a, b) => a.team_picked.localeCompare(b.team_picked));
+                        
+                        let picksHtml = '<h6 class="mt-4">Player Picks</h6><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Player</th><th>Team Picked</th><th>Current Status</th></tr></thead><tbody>';
+                        
+                        picks.forEach(pick => {
+                            let statusBadge = 'secondary';
+                            let statusText = 'Pending';
+                            
+                            if (pick.is_winner === true) {
+                                statusBadge = 'success';
+                                statusText = 'Winner';
+                            } else if (pick.is_winner === false) {
+                                statusBadge = 'danger';
+                                statusText = 'Eliminated';
+                            }
+                            
+                            const teamAbbrev = getTeamAbbreviation(pick.team_picked);
+                            
+                            picksHtml += `
+                                <tr>
+                                    <td><strong>${pick.player_name}</strong></td>
+                                    <td><span title="${pick.team_picked}">${teamAbbrev}</span></td>
+                                    <td><span class="badge bg-${statusBadge}">${statusText}</span></td>
+                                </tr>
+                            `;
+                        });
+                        
+                        picksHtml += '</tbody></table></div>';
+                        picksDiv.innerHTML = picksHtml;
+                    } else {
+                        picksDiv.innerHTML = '<div class="alert alert-warning">No picks found for this round</div>';
+                    }
+                    
+                    processBtn.disabled = picks.length === 0;
+                    
+                    // Add event listener to auto-populate button (after it's created)
+                    const autoPopulateBtn = document.getElementById('autoPopulateBtn');
+                    if (autoPopulateBtn) {
+                        autoPopulateBtn.addEventListener('click', function() {
+                            this.disabled = true;
+                            this.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Loading...';
+                            
+                            fetch(`/api/rounds/${roundId}/auto-populate-results`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                }
+                            })
+                            .then(response => response.json())
+                            .then(data => {
+                                if (data.success) {
+                                    alert(`${data.message}\n\nUpdated ${data.updated_fixtures} fixtures with completed results.`);
+                                    // Reload the round data to show updated scores
+                                    document.getElementById('resultsRoundSelect').dispatchEvent(new Event('change'));
+                                } else {
+                                    alert('Error auto-populating results: ' + data.error);
+                                }
+                            })
+                            .catch(error => {
+                                alert('Error auto-populating results: ' + error);
+                            })
+                            .finally(() => {
+                                this.disabled = false;
+                                this.innerHTML = '<i class="fas fa-download me-1"></i>Auto-Populate from API';
+                            });
+                        });
+                    }
+                } else {
+                    roundInfo.innerHTML = '<div class="alert alert-danger">Error loading round data</div>';
+                    processBtn.disabled = true;
+                }
+            })
+            .catch(error => {
+                console.error('Error loading round data:', error);
+                roundInfo.innerHTML = '<div class="alert alert-danger">Error loading data</div>';
+                processBtn.disabled = true;
+            });
+    });
+    
+    // Handle process results
+    document.getElementById('processResultsBtn').addEventListener('click', function() {
+        const roundId = document.getElementById('resultsRoundSelect').value;
+        
+        if (!roundId) {
+            alert('Please select a round');
+            return;
+        }
+        
+        // Collect all scores
+        const scoreInputs = document.querySelectorAll('.score-input');
+        const results = [];
+        const fixtureResults = {};
+        
+        scoreInputs.forEach(input => {
+            const fixtureId = input.getAttribute('data-fixture-id');
+            const type = input.getAttribute('data-type');
+            const score = input.value.trim();
+            
+            // Only include if score is explicitly entered (not empty)
+            if (score !== '' && !isNaN(parseInt(score))) {
+                if (!fixtureResults[fixtureId]) {
+                    fixtureResults[fixtureId] = { fixture_id: parseInt(fixtureId) };
+                }
+                fixtureResults[fixtureId][type + '_score'] = parseInt(score);
+            }
+        });
+        
+        // Convert to array and validate - only include fixtures with BOTH scores entered
+        for (const fixtureId in fixtureResults) {
+            const result = fixtureResults[fixtureId];
+            if ('home_score' in result && 'away_score' in result) {
+                results.push(result);
+            }
+        }
+        
+        if (results.length === 0) {
+            alert('Please enter scores for at least one match');
+            return;
+        }
+        
+        if (!confirm(`Are you sure you want to process results for ${results.length} matches? This will eliminate players whose teams lost or drew.`)) {
+            return;
+        }
+        
+        this.disabled = true;
+        this.textContent = 'Processing...';
+        
+        fetch(`/api/rounds/${roundId}/process-results`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ results: results })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Results processed successfully!\n\nEliminated players: ${data.total_eliminated}\nSurviving players: ${data.total_surviving}`);
+                document.getElementById('resultsModal').querySelector('[data-bs-dismiss="modal"]').click();
+                location.reload();
+            } else {
+                alert('Error processing results: ' + data.error);
+            }
+        })
+        .catch(error => {
+            alert('Error processing results: ' + error);
+        })
+        .finally(() => {
+            this.disabled = false;
+            this.textContent = 'Process Results & Eliminate Players';
+        });
+    });
+    
+    // Reset results modal when hidden
+    document.getElementById('resultsModal').addEventListener('hidden.bs.modal', function() {
+        document.getElementById('resultsRoundSelect').value = '';
+        document.getElementById('resultsRoundInfo').innerHTML = '';
+        document.getElementById('roundFixtures').innerHTML = '';
+        document.getElementById('playerPicks').innerHTML = '';
+        document.getElementById('processResultsBtn').disabled = true;
+    });
     
     // Re-attach event listeners after sorting
     function attachPlayerEventListeners() {

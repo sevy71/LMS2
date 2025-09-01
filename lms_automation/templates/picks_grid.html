@@ -333,6 +333,47 @@
 
 {% block scripts %}
 <script>
+// Premier League team abbreviations mapping
+function getTeamAbbreviation(teamName) {
+    const abbreviations = {
+        'Arsenal': 'ARS',
+        'Aston Villa': 'AVFC',
+        'Aston Villa FC': 'AVFC',
+        'AFC Bournemouth': 'BOU',
+        'Bournemouth': 'BOU',
+        'Bournemouth AFC': 'BOU',
+        'Brentford': 'BRE',
+        'Brighton': 'BHA',
+        'Brighton & Hove Albion': 'BHA',
+        'Burnley': 'BUR',
+        'Chelsea': 'CHE',
+        'Crystal Palace': 'CRY',
+        'Everton': 'EVE',
+        'Everton FC': 'EVE',
+        'Fulham': 'FUL',
+        'Liverpool': 'LIV',
+        'Liverpool FC': 'LIV',
+        'Luton Town': 'LUT',
+        'Manchester City': 'MCI',
+        'Manchester City FC': 'MCI',
+        'Manchester United': 'MUN',
+        'Manchester United FC': 'MUN',
+        'Newcastle': 'NEW',
+        'Newcastle United': 'NEW',
+        'Nottingham Forest': 'NOT',
+        'Sheffield United': 'SHE',
+        'Tottenham': 'TOT',
+        'Tottenham Hotspur': 'TOT',
+        'Tottenham Hotspur FC': 'TOT',
+        'West Ham': 'WHU',
+        'West Ham United': 'WHU',
+        'Wolves': 'WOL',
+        'Wolverhampton Wanderers': 'WOL'
+    };
+    
+    return abbreviations[teamName] || teamName.substring(0, 3).toUpperCase();
+}
+
 let gridData = null;
 let currentSort = 'name';
 
@@ -614,8 +655,10 @@ document.addEventListener('DOMContentLoaded', function() {
             statusText = '✗ Lost';
         }
         
+        const teamAbbrev = getTeamAbbreviation(team);
+        
         return {
-            display: team,
+            display: teamAbbrev,
             class: displayClass,
             tooltip: `Round ${roundNumber}: ${team} ${statusText}`
         };
