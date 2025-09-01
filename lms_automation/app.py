@@ -676,10 +676,10 @@ def get_matchday_info(matchday):
         traceback.print_exc()
         return jsonify({'success': False, 'error': f'Failed to get matchday info: {str(e)}'}), 500
 
-@app.route('/api/rounds/<int:round_id>', methods=['GET', 'PUT'])
+@app.route('/api/rounds/<int:round_id>', methods=['GET', 'PUT', 'DELETE'])
 @admin_required
 def handle_round_by_id(round_id):
-    """Get detailed information about a specific round or update its status"""
+    """Get detailed information about a specific round, update its status, or delete it"""
     round_obj = Round.query.get_or_404(round_id)
     
     if request.method == 'GET':
@@ -728,6 +728,42 @@ def handle_round_by_id(round_id):
                 'old_status': old_status,
                 'new_status': new_status,
                 'message': f'Round {round_obj.round_number} status updated from {old_status} to {new_status}'
+            })
+            
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({'success': False, 'error': str(e)}), 500
+    
+    elif request.method == 'DELETE':
+        try:
+            round_number = round_obj.round_number
+            
+            # Check if round has any picks
+            picks_count = Pick.query.filter_by(round_id=round_id).count()
+            if picks_count > 0:
+                return jsonify({'success': False, 'error': f'Cannot delete round with {picks_count} existing picks'}), 400
+            
+            # Delete all related data in correct order (foreign key constraints)
+            
+            # 1. Delete pick tokens first
+            tokens_deleted = PickToken.query.filter_by(round_id=round_id).delete()
+            
+            # 2. Delete all fixtures 
+            fixtures_deleted = Fixture.query.filter_by(round_id=round_id).delete()
+            
+            # 3. Delete the round itself
+            db.session.delete(round_obj)
+            
+            # Commit all deletions
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': f'Round {round_number} deleted successfully',
+                'details': {
+                    'fixtures_deleted': fixtures_deleted,
+                    'tokens_deleted': tokens_deleted
+                }
             })
             
         except Exception as e:
