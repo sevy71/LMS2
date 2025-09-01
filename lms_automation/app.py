@@ -1404,6 +1404,17 @@ def debug_used_teams(player_id):
         picks_data = result.fetchall()
         used_teams = [row[1] for row in picks_data]
         
+        # Get current round fixtures to compare team names
+        current_round = Round.query.filter_by(status='active').first()
+        fixture_teams = []
+        if current_round:
+            fixture_result = db.session.execute(db.text(
+                "SELECT home_team, away_team FROM fixtures WHERE round_id = :round_id"
+            ), {"round_id": current_round.id})
+            
+            for home, away in fixture_result.fetchall():
+                fixture_teams.extend([home, away])
+        
         return jsonify({
             'success': True,
             'player_name': player.name,
@@ -1416,6 +1427,8 @@ def debug_used_teams(player_id):
                 } for row in picks_data
             ],
             'used_teams': used_teams,
+            'fixture_teams': list(set(fixture_teams)),
+            'team_matches': {team: team in fixture_teams for team in used_teams},
             'total_picks': len(picks_data)
         })
         
