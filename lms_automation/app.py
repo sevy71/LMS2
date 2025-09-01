@@ -1299,6 +1299,41 @@ def process_round_results(round_id):
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/debug-used-teams/<int:player_id>')
+@admin_required  
+def debug_used_teams(player_id):
+    """Debug endpoint to check which teams a player has used"""
+    try:
+        player = Player.query.get_or_404(player_id)
+        
+        # Use raw SQL to get picks
+        result = db.session.execute(db.text(
+            "SELECT r.round_number, picks.team_picked, picks.is_winner "
+            "FROM picks JOIN rounds r ON picks.round_id = r.id "
+            "WHERE picks.player_id = :player_id ORDER BY r.round_number"
+        ), {"player_id": player_id})
+        
+        picks_data = result.fetchall()
+        used_teams = [row[1] for row in picks_data]
+        
+        return jsonify({
+            'success': True,
+            'player_name': player.name,
+            'player_status': player.status,
+            'picks_history': [
+                {
+                    'round': row[0],
+                    'team': row[1], 
+                    'result': 'WIN' if row[2] else 'LOSE' if row[2] is False else 'PENDING'
+                } for row in picks_data
+            ],
+            'used_teams': used_teams,
+            'total_picks': len(picks_data)
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/emergency-delete-round4', methods=['POST'])
 @admin_required
 def emergency_delete_round4():
