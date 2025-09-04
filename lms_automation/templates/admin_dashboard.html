@@ -725,7 +725,8 @@
             <div class="modal-header d-flex align-items-center justify-content-between">
                 <h5 class="modal-title">📊 Player Statistics Dashboard</h5>
                 <div class="d-flex align-items-center gap-2">
-                    <button type="button" class="btn btn-sm btn-outline-primary" id="statsReloadBtn">Reload</button>
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="statsReloadBtn" onclick="window.fetchAndRenderStats && window.fetchAndRenderStats()">Reload</button>
+                    <a class="btn btn-sm btn-outline-secondary" href="/api/statistics" target="_blank">Open JSON</a>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
             </div>
@@ -2187,3 +2188,6 @@ function attachPlayerEventListeners() {
 
     // Fallback: attempt initial fetch on page load (content exists in DOM even if modal closed)
     fetchAndRenderStats();
+
+    // Expose for inline handlers
+    window.fetchAndRenderStats = fetchAndRenderStats;
