@@ -14,7 +14,7 @@
     </div>
 
     <div class="card">
-        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div class="card-header d-flex flex-column gap-2">
             <div class="d-flex align-items-center gap-2">
                 <h5 class="card-title mb-0">All Player Picks</h5>
                 <div class="btn-group ms-2" role="group" aria-label="View mode">
@@ -22,34 +22,18 @@
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="viewRound">Round View</button>
                 </div>
             </div>
-            <div class="d-flex align-items-center gap-2 flex-wrap">
-                <div class="input-group input-group-sm" style="max-width: 260px;">
+            <div class="d-flex align-items-center gap-2 flex-wrap controls-scroll">
+                <div class="input-group input-group-sm" style="max-width: 320px;">
                     <span class="input-group-text"><i class="fas fa-search"></i></span>
                     <input id="playerSearch" type="text" class="form-control" placeholder="Search players">
                 </div>
-                <div class="btn-group" role="group">
-                <button type="button" class="btn btn-outline-primary btn-sm" id="sortByName">
-                    📝 Sort by Name
-                </button>
-                <button type="button" class="btn btn-outline-warning btn-sm" id="sortByStatus">
-                    🎯 Group by Status
-                </button>
-                <button type="button" class="btn btn-outline-success btn-sm" id="sortByLatestRound">
-                    🎲 Sort by Latest Round
-                </button>
-                <button type="button" class="btn btn-outline-dark btn-sm" id="sortByProgress">
-                    🔢 Active → Teams Picked
-                </button>
-                <button type="button" class="btn btn-outline-info btn-sm" id="adjustColumns">
-                    📊 Adjust Columns
-                </button>
-                <div class="btn-group" role="group">
-                    <button type="button" class="btn btn-outline-secondary btn-sm" id="exportGrid">
-                        ⬇️ Export Grid CSV
-                    </button>
-                    <button type="button" class="btn btn-outline-secondary btn-sm" id="exportRound">
-                        ⬇️ Export Round CSV
-                    </button>
+                <div class="d-flex flex-wrap gap-1">
+                    <button type="button" class="btn btn-outline-primary btn-sm" id="sortByName">📝 Sort by Name</button>
+                    <button type="button" class="btn btn-outline-warning btn-sm" id="sortByStatus">🎯 Group by Status</button>
+                    <button type="button" class="btn btn-outline-success btn-sm d-none d-sm-inline-block" id="sortByLatestRound">🎲 Sort by Latest Round</button>
+                    <button type="button" class="btn btn-outline-dark btn-sm" id="sortByProgress">🔢 Active → Teams Picked</button>
+                    <button type="button" class="btn btn-outline-info btn-sm d-none d-sm-inline-block" id="adjustColumns">📊 Adjust Columns</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="exportGrid">⬇️ Export Grid CSV</button>
                 </div>
             </div>
         </div>
@@ -68,14 +52,17 @@
                 </div>
             </div>
 
-            <div class="d-flex justify-content-between align-items-center mb-2" id="roundControls" style="display:none;">
+            <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2" id="roundControls" style="display:none;">
                 <div class="d-flex align-items-center gap-2">
                     <label for="roundSelect" class="form-label mb-0">Round:</label>
                     <select id="roundSelect" class="form-select form-select-sm" style="width:auto;"></select>
                 </div>
-                <div class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="activeOnly">
-                    <label class="form-check-label" for="activeOnly">Active players only</label>
+                <div class="d-flex align-items-center gap-3">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="activeOnly">
+                        <label class="form-check-label" for="activeOnly">Active players only</label>
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="exportRound">⬇️ Export Round CSV</button>
                 </div>
             </div>
 
@@ -365,6 +352,10 @@
         min-width: 100px;
     }
 }
+
+/* Controls overflow handling for small screens */
+.controls-scroll { overflow-x: auto; }
+.controls-scroll > * { white-space: nowrap; }
 </style>
 {% endblock %}
 
@@ -630,7 +621,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const roundNumber = parseInt(roundSelect?.value || currentRoundNumber || 0, 10);
 
         if (activeOnly?.checked) {
-            players = players.filter(p => p.status === 'active');
+            players = players.filter(p => (p.status || '').toLowerCase() === 'active');
         }
 
         let html = '<div class="table-responsive"><table class="table table-sm table-hover">';
