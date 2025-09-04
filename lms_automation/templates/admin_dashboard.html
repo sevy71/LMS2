@@ -722,9 +722,12 @@
 <div class="modal fade" id="statsModal" tabindex="-1">
     <div class="modal-dialog modal-xl">
         <div class="modal-content">
-            <div class="modal-header">
+            <div class="modal-header d-flex align-items-center justify-content-between">
                 <h5 class="modal-title">📊 Player Statistics Dashboard</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="statsReloadBtn">Reload</button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
             </div>
             <div class="modal-body">
                 <div class="row mb-4">
@@ -2177,4 +2180,10 @@ function attachPlayerEventListeners() {
         document.querySelectorAll('[data-bs-target="#statsModal"]').forEach(btn => {
             btn.addEventListener('click', () => setTimeout(fetchAndRenderStats, 0));
         });
+        // Reload button
+        const reloadBtn = document.getElementById('statsReloadBtn');
+        if (reloadBtn) reloadBtn.addEventListener('click', fetchAndRenderStats);
     }
+
+    // Fallback: attempt initial fetch on page load (content exists in DOM even if modal closed)
+    fetchAndRenderStats();
