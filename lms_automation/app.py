@@ -1214,6 +1214,106 @@ def export_data(export_type):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/export/picks-grid')
+@admin_required
+def export_picks_grid_csv():
+    """Export a spreadsheet-style grid: Player, Status, R1..Rn with team and result."""
+    try:
+        import csv
+        from io import StringIO
+        from flask import make_response
+
+        rounds = Round.query.order_by(Round.round_number).all()
+        players = Player.query.order_by(Player.name).all()
+
+        # Build a quick lookup for picks
+        picks = Pick.query.all()
+        pick_map = {(p.player_id, p.round_id): p for p in picks}
+
+        def pick_cell(pick_obj):
+            if not pick_obj:
+                return ''
+            if pick_obj.is_winner is True:
+                suffix = ' (W)'
+            elif pick_obj.is_winner is False:
+                suffix = ' (L)'
+            else:
+                suffix = ' (P)'
+            return f"{pick_obj.team_picked}{suffix}"
+
+        output = StringIO()
+        writer = csv.writer(output)
+
+        # Header
+        header = ['Player', 'Status'] + [f"R{r.round_number}" for r in rounds]
+        writer.writerow(header)
+
+        # Rows
+        for player in players:
+            row = [player.name, player.status]
+            for r in rounds:
+                row.append(pick_cell(pick_map.get((player.id, r.id))))
+            writer.writerow(row)
+
+        response = make_response(output.getvalue())
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = 'attachment; filename=lms_picks_grid.csv'
+        return response
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/export/round-picks')
+@admin_required
+def export_round_picks_csv():
+    """Export all picks for a specific round as CSV: Player, Team, Result."""
+    try:
+        import csv
+        from io import StringIO
+        from flask import make_response
+
+        # Determine round number: query param or fallback to active or latest
+        round_num_param = request.args.get('round', type=int)
+
+        round_obj = None
+        if round_num_param:
+            round_obj = Round.query.filter_by(round_number=round_num_param).first()
+        if not round_obj:
+            round_obj = Round.query.filter_by(status='active').first()
+        if not round_obj:
+            round_obj = Round.query.order_by(Round.round_number.desc()).first()
+        if not round_obj:
+            return jsonify({'success': False, 'error': 'No rounds available'}), 404
+
+        picks = Pick.query.filter_by(round_id=round_obj.id).join(Player).all()
+
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Round', 'Player', 'Team', 'Result'])
+
+        # Sort active first, then by total picks made (desc), then name
+        players_total_picks = {p.id: Pick.query.filter_by(player_id=p.id).count() for p in Player.query.all()}
+
+        def sort_key(pick):
+            player = pick.player
+            status_pri = 0 if player.status == 'active' else (1 if player.status == 'winner' else 2)
+            return (status_pri, -players_total_picks.get(player.id, 0), player.name)
+
+        for pick in sorted(picks, key=sort_key):
+            if pick.is_winner is True:
+                result = 'Winner'
+            elif pick.is_winner is False:
+                result = 'Eliminated'
+            else:
+                result = 'Pending'
+            writer.writerow([f"R{round_obj.round_number}", pick.player.name, pick.team_picked, result])
+
+        response = make_response(output.getvalue())
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = f'attachment; filename=lms_round_{round_obj.round_number}_picks.csv'
+        return response
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/rounds/<int:round_id>/process-results', methods=['POST'])
 @admin_required  
 def process_round_results(round_id):

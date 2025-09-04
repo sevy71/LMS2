@@ -43,6 +43,14 @@
                 <button type="button" class="btn btn-outline-info btn-sm" id="adjustColumns">
                     📊 Adjust Columns
                 </button>
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="exportGrid">
+                        ⬇️ Export Grid CSV
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="exportRound">
+                        ⬇️ Export Round CSV
+                    </button>
+                </div>
             </div>
         </div>
         <div class="card-body">
@@ -862,6 +870,23 @@ document.addEventListener('DOMContentLoaded', function() {
             const controls = document.getElementById('columnControls');
             controls.style.display = controls.style.display === 'none' ? 'block' : 'none';
         });
+
+        // Export buttons
+        const exportGridBtn = document.getElementById('exportGrid');
+        if (exportGridBtn) {
+            exportGridBtn.addEventListener('click', function() {
+                window.location.href = '/api/export/picks-grid';
+            });
+        }
+        const exportRoundBtn = document.getElementById('exportRound');
+        if (exportRoundBtn) {
+            exportRoundBtn.addEventListener('click', function() {
+                const roundSelect = document.getElementById('roundSelect');
+                const r = roundSelect && roundSelect.value ? roundSelect.value : '';
+                const qs = r ? `?round=${encodeURIComponent(r)}` : '';
+                window.location.href = `/api/export/round-picks${qs}`;
+            });
+        }
     }
 
     function updateSortButtons(activeButton) {
