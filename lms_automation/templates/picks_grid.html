@@ -14,9 +14,20 @@
     </div>
 
     <div class="card">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="card-title mb-0">All Player Picks by Round</h5>
-            <div class="btn-group" role="group">
+        <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div class="d-flex align-items-center gap-2">
+                <h5 class="card-title mb-0">All Player Picks</h5>
+                <div class="btn-group ms-2" role="group" aria-label="View mode">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="viewPlayer">Player View</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="viewRound">Round View</button>
+                </div>
+            </div>
+            <div class="d-flex align-items-center gap-2 flex-wrap">
+                <div class="input-group input-group-sm" style="max-width: 260px;">
+                    <span class="input-group-text"><i class="fas fa-search"></i></span>
+                    <input id="playerSearch" type="text" class="form-control" placeholder="Search players">
+                </div>
+                <div class="btn-group" role="group">
                 <button type="button" class="btn btn-outline-primary btn-sm" id="sortByName">
                     📝 Sort by Name
                 </button>
@@ -25,6 +36,9 @@
                 </button>
                 <button type="button" class="btn btn-outline-success btn-sm" id="sortByLatestRound">
                     🎲 Sort by Latest Round
+                </button>
+                <button type="button" class="btn btn-outline-dark btn-sm" id="sortByProgress">
+                    🔢 Active → Teams Picked
                 </button>
                 <button type="button" class="btn btn-outline-info btn-sm" id="adjustColumns">
                     📊 Adjust Columns
@@ -46,8 +60,23 @@
                 </div>
             </div>
 
+            <div class="d-flex justify-content-between align-items-center mb-2" id="roundControls" style="display:none;">
+                <div class="d-flex align-items-center gap-2">
+                    <label for="roundSelect" class="form-label mb-0">Round:</label>
+                    <select id="roundSelect" class="form-select form-select-sm" style="width:auto;"></select>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="activeOnly">
+                    <label class="form-check-label" for="activeOnly">Active players only</label>
+                </div>
+            </div>
+
             <div id="grid-container" class="spreadsheet-container">
-                <p>Loading picks data...</p>
+                <div class="p-3">
+                    <div class="skeleton" style="height: 24px; margin-bottom: 8px;"></div>
+                    <div class="skeleton" style="height: 24px; margin-bottom: 8px;"></div>
+                    <div class="skeleton" style="height: 24px; width: 70%;"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -375,10 +404,17 @@ function getTeamAbbreviation(teamName) {
 }
 
 let gridData = null;
-let currentSort = 'name';
+let currentSort = 'progress';
+let currentView = 'player'; // 'player' | 'round'
+let currentRoundNumber = null;
 
 document.addEventListener('DOMContentLoaded', function() {
     const gridContainer = document.getElementById('grid-container');
+
+    // Default to Round view on small screens
+    if (window.matchMedia && window.matchMedia('(max-width: 576px)').matches) {
+        currentView = 'round';
+    }
 
     // Load data
     fetch('/api/picks-grid-data')
@@ -386,7 +422,16 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(data => {
             if (data.success) {
                 gridData = data;
-                renderGrid(data);
+                // Initialize rounds selector for round view
+                const rounds = data.rounds || [];
+                const roundSelect = document.getElementById('roundSelect');
+                if (rounds.length > 0 && roundSelect) {
+                    roundSelect.innerHTML = rounds.map(r => `<option value="${r}">R${r}</option>`).join('');
+                    currentRoundNumber = Math.max(...rounds);
+                    roundSelect.value = String(currentRoundNumber);
+                }
+
+                renderByView();
                 setupEventListeners();
             } else {
                 gridContainer.innerHTML = `<div class="alert alert-danger">Error loading data: ${data.error}</div>`;
@@ -396,6 +441,56 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('Error fetching picks grid data:', error);
             gridContainer.innerHTML = '<div class="alert alert-danger">Could not fetch data from the server.</div>';
         });
+
+    function sortPlayersForProgress(players) {
+        // Active first, then by teams picked (descending), then name
+        const statusOrder = { 'active': 1, 'winner': 2, 'eliminated': 3 };
+        return [...players].sort((a, b) => {
+            const aStatus = statusOrder[a.status] || 99;
+            const bStatus = statusOrder[b.status] || 99;
+            if (aStatus !== bStatus) return aStatus - bStatus;
+            const aPicks = Object.values(a.picks || {}).filter(v => v !== null).length;
+            const bPicks = Object.values(b.picks || {}).filter(v => v !== null).length;
+            if (aPicks !== bPicks) return bPicks - aPicks; // more teams picked first
+            return a.name.localeCompare(b.name);
+        });
+    }
+
+    function applySearchFilter(players) {
+        const q = (document.getElementById('playerSearch')?.value || '').trim().toLowerCase();
+        if (!q) return players;
+        return players.filter(p => p.name.toLowerCase().includes(q));
+    }
+
+    function renderByView() {
+        if (!gridData) return;
+        if (currentView === 'round') {
+            document.getElementById('columnControls').style.display = 'none';
+            document.getElementById('roundControls').style.display = 'flex';
+            renderRoundView(gridData);
+            setActiveViewButton('viewRound');
+        } else {
+            document.getElementById('roundControls').style.display = 'none';
+            renderGrid(gridData, currentSort);
+            setActiveViewButton('viewPlayer');
+        }
+    }
+
+    function setActiveViewButton(activeId) {
+        ['viewPlayer','viewRound'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (id === activeId) {
+                el.classList.remove('btn-outline-secondary');
+                el.classList.add('btn-secondary');
+                el.setAttribute('aria-pressed', 'true');
+            } else {
+                el.classList.remove('btn-secondary');
+                el.classList.add('btn-outline-secondary');
+                el.setAttribute('aria-pressed', 'false');
+            }
+        });
+    }
 
     function renderGrid(data, sortBy = 'name') {
         const rounds = data.rounds;
@@ -407,7 +502,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Sort players
-        if (sortBy === 'name') {
+        if (sortBy === 'progress') {
+            players = sortPlayersForProgress(players);
+        } else if (sortBy === 'name') {
             players.sort((a, b) => a.name.localeCompare(b.name));
         } else if (sortBy === 'status') {
             // Group by status: active first, then eliminated, then winner
@@ -513,6 +610,35 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Setup column resizing
         setupColumnResizing();
+    }
+
+    function renderRoundView(data) {
+        const playersRaw = data.players || [];
+        let players = sortPlayersForProgress(playersRaw);
+        players = applySearchFilter(players);
+
+        const roundSelect = document.getElementById('roundSelect');
+        const activeOnly = document.getElementById('activeOnly');
+        const roundNumber = parseInt(roundSelect?.value || currentRoundNumber || 0, 10);
+
+        if (activeOnly?.checked) {
+            players = players.filter(p => p.status === 'active');
+        }
+
+        let html = '<div class="table-responsive"><table class="table table-sm table-hover">';
+        html += '<thead class="table-dark"><tr><th>Player</th><th>Pick</th><th>Status</th></tr></thead><tbody>';
+        players.forEach(p => {
+            const pickData = (p.picks && p.picks[roundNumber]) || null;
+            const pickInfo = getPickInfo(pickData, roundNumber);
+            const badge = `<span class="status-badge status-${p.status}">${p.status.toUpperCase()}</span>`;
+            html += `<tr>
+                <td>${p.name}</td>
+                <td class="${pickInfo.class}">${pickInfo.display}</td>
+                <td>${badge}</td>
+            </tr>`;
+        });
+        html += '</tbody></table></div>';
+        gridContainer.innerHTML = html;
     }
 
     function syncScrolling() {
@@ -666,26 +792,70 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
     function setupEventListeners() {
+        // View toggles
+        document.getElementById('viewPlayer').addEventListener('click', function() {
+            currentView = 'player';
+            renderByView();
+        });
+        document.getElementById('viewRound').addEventListener('click', function() {
+            currentView = 'round';
+            renderByView();
+        });
+
         // Sort by name
         document.getElementById('sortByName').addEventListener('click', function() {
             currentSort = 'name';
-            renderGrid(gridData, 'name');
+            currentView = 'player';
+            renderByView();
             updateSortButtons('sortByName');
         });
 
         // Sort by status
         document.getElementById('sortByStatus').addEventListener('click', function() {
             currentSort = 'status';
-            renderGrid(gridData, 'status');
+            currentView = 'player';
+            renderByView();
             updateSortButtons('sortByStatus');
         });
 
         // Sort by latest round
         document.getElementById('sortByLatestRound').addEventListener('click', function() {
             currentSort = 'latestRound';
-            renderGrid(gridData, 'latestRound');
+            currentView = 'player';
+            renderByView();
             updateSortButtons('sortByLatestRound');
         });
+
+        // Sort by progress (Active → Teams Picked)
+        document.getElementById('sortByProgress').addEventListener('click', function() {
+            currentSort = 'progress';
+            currentView = 'player';
+            renderByView();
+            updateSortButtons('sortByProgress');
+        });
+
+        // Search
+        const search = document.getElementById('playerSearch');
+        if (search) {
+            search.addEventListener('input', function() {
+                renderByView();
+            });
+        }
+
+        // Round controls
+        const roundSelect = document.getElementById('roundSelect');
+        if (roundSelect) {
+            roundSelect.addEventListener('change', function() {
+                currentRoundNumber = parseInt(this.value, 10);
+                renderByView();
+            });
+        }
+        const activeOnly = document.getElementById('activeOnly');
+        if (activeOnly) {
+            activeOnly.addEventListener('change', function() {
+                renderByView();
+            });
+        }
 
         // Toggle column controls
         document.getElementById('adjustColumns').addEventListener('click', function() {
@@ -695,25 +865,29 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateSortButtons(activeButton) {
-        ['sortByName', 'sortByStatus', 'sortByLatestRound'].forEach(id => {
+        ['sortByName', 'sortByStatus', 'sortByLatestRound', 'sortByProgress'].forEach(id => {
             const btn = document.getElementById(id);
             if (id === activeButton) {
-                btn.classList.remove('btn-outline-primary', 'btn-outline-warning', 'btn-outline-success');
+                btn.classList.remove('btn-outline-primary', 'btn-outline-warning', 'btn-outline-success', 'btn-outline-dark');
                 if (id === 'sortByName') {
                     btn.classList.add('btn-primary');
                 } else if (id === 'sortByStatus') {
                     btn.classList.add('btn-warning');
                 } else if (id === 'sortByLatestRound') {
                     btn.classList.add('btn-success');
+                } else if (id === 'sortByProgress') {
+                    btn.classList.add('btn-dark');
                 }
             } else {
-                btn.classList.remove('btn-primary', 'btn-warning', 'btn-success');
+                btn.classList.remove('btn-primary', 'btn-warning', 'btn-success', 'btn-dark');
                 if (id === 'sortByName') {
                     btn.classList.add('btn-outline-primary');
                 } else if (id === 'sortByStatus') {
                     btn.classList.add('btn-outline-warning');
                 } else if (id === 'sortByLatestRound') {
                     btn.classList.add('btn-outline-success');
+                } else if (id === 'sortByProgress') {
+                    btn.classList.add('btn-outline-dark');
                 }
             }
         });
