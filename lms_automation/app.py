@@ -1352,7 +1352,8 @@ def export_picks_grid_excel():
         for player in players:
             row_class = 'row-elim' if (player.status or '').lower() == 'eliminated' else ''
             status_class = f"status-{(player.status or '').lower()}"
-            html.append(f'<tr class="{row_class}"><td>{player.name}</td><td><span class="status-badge {status_class}">{(player.status or '').upper()}</span></td>')
+            status_text = (player.status or '').upper()
+            html.append(f'<tr class="{row_class}"><td>{player.name}</td><td><span class="status-badge {status_class}">{status_text}</span></td>')
             for r in rounds:
                 html.append(f'<td>{pick_cell(pick_map.get((player.id, r.id)))}</td>')
             html.append('</tr>')

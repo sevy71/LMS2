@@ -65,7 +65,10 @@
                         <input class="form-check-input" type="checkbox" id="activeOnly">
                         <label class="form-check-label" for="activeOnly">Active players only</label>
                     </div>
-                    <button type="button" class="btn btn-outline-secondary btn-sm" id="exportRound">⬇️ Export Round CSV</button>
+                    <div class="btn-group">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="exportRound">⬇️ Export Round CSV</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="exportRoundExcel">⬇️ Export Round Excel</button>
+                    </div>
                 </div>
             </div>
 
@@ -359,6 +362,9 @@
 /* Controls overflow handling for small screens */
 .controls-scroll { overflow-x: auto; }
 .controls-scroll > * { white-space: nowrap; }
+
+/* Round view uses vertical scroll inside container */
+.spreadsheet-container.round-view { overflow: auto; }
 </style>
 {% endblock %}
 
@@ -469,10 +475,15 @@ document.addEventListener('DOMContentLoaded', function() {
         if (currentView === 'round') {
             document.getElementById('columnControls').style.display = 'none';
             document.getElementById('roundControls').style.display = 'flex';
+            // Allow vertical scrolling in round view
+            const container = document.getElementById('grid-container');
+            if (container) container.classList.add('round-view');
             renderRoundView(gridData);
             setActiveViewButton('viewRound');
         } else {
             document.getElementById('roundControls').style.display = 'none';
+            const container = document.getElementById('grid-container');
+            if (container) container.classList.remove('round-view');
             renderGrid(gridData, currentSort);
             setActiveViewButton('viewPlayer');
         }
