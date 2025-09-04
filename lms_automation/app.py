@@ -1421,6 +1421,7 @@ def export_picks_grid_xlsx():
     try:
         from openpyxl import Workbook
         from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.utils import get_column_letter
         from flask import make_response
 
         rounds = Round.query.order_by(Round.round_number).all()
@@ -1446,8 +1447,22 @@ def export_picks_grid_xlsx():
         red_fill = PatternFill('solid', fgColor='F8D7DA')
         red_font = Font(color='842029')
 
-        # Rows
-        for player in players:
+        # Determine latest round for secondary sort
+        latest_round = max(rounds, key=lambda r: r.round_number) if rounds else None
+
+        # Sort players: Active → latest round team (A→Z, players with no pick last) → name
+        def sort_key(player):
+            status = (player.status or '').lower()
+            status_pri = 0 if status == 'active' else (1 if status == 'winner' else 2)
+            team = None
+            if latest_round:
+                pk = pick_map.get((player.id, latest_round.id))
+                team = pk.team_picked if pk else None
+            # Players with a team come first (0), then alphabetically; None teams last (1)
+            team_presence = 0 if team else 1
+            return (status_pri, team_presence, (team or 'zzzz'), player.name)
+
+        for player in sorted(players, key=sort_key):
             row = [player.name, (player.status or '').upper()]
             for r in rounds:
                 pick_obj = pick_map.get((player.id, r.id))
@@ -1476,9 +1491,10 @@ def export_picks_grid_xlsx():
             width = max(10, min(20, len(title) + 2))
             if col_idx == 1:
                 width = 22
-            ws.column_dimensions[chr(64 + col_idx)].width = width
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-        ws.freeze_panes = 'C2'
+        # Freeze header row and column A (Player)
+        ws.freeze_panes = 'B2'
 
         bio = BytesIO()
         wb.save(bio)
@@ -1560,7 +1576,8 @@ def export_round_picks_xlsx():
         ws.column_dimensions['B'].width = 12
         ws.column_dimensions['C'].width = 18
         ws.column_dimensions['D'].width = 12
-        ws.freeze_panes = 'A2'
+        # Freeze header row and column A (Player)
+        ws.freeze_panes = 'B2'
 
         bio = BytesIO()
         wb.save(bio)
