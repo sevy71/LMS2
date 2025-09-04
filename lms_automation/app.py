@@ -1291,13 +1291,13 @@ def export_round_picks_csv():
         writer = csv.writer(output)
         writer.writerow(['Round', 'Player', 'Team', 'Result'])
 
-        # Sort active first, then by total picks made (desc), then name
-        players_total_picks = {p.id: Pick.query.filter_by(player_id=p.id).count() for p in Player.query.all()}
-
+        # Sort: Active first, then by team picked (A→Z), then by player name
         def sort_key(pick):
             player = pick.player
-            status_pri = 0 if player.status == 'active' else (1 if player.status == 'winner' else 2)
-            return (status_pri, -players_total_picks.get(player.id, 0), player.name)
+            status = (player.status or '').lower()
+            status_pri = 0 if status == 'active' else (1 if status == 'winner' else 2)
+            team = pick.team_picked or 'zzzz'
+            return (status_pri, team, player.name)
 
         for pick in sorted(picks, key=sort_key):
             if pick.is_winner is True:
@@ -1537,16 +1537,13 @@ def export_round_picks_xlsx():
                 return 'Eliminated'
             return 'Pending'
 
-        # Sort active first, then by total picks, then name
-        players_total_picks = {p.id: Pick.query.filter_by(player_id=p.id).count() for p in Player.query.all()}
-        picks_sorted = sorted(
-            picks,
-            key=lambda pk: (
-                0 if pk.player.status == 'active' else (1 if pk.player.status == 'winner' else 2),
-                -players_total_picks.get(pk.player.id, 0),
-                pk.player.name,
-            ),
-        )
+        # Sort: Active first, then by team picked (A→Z), then by player name
+        def sort_key(pk):
+            status = (pk.player.status or '').lower()
+            status_pri = 0 if status == 'active' else (1 if status == 'winner' else 2)
+            team = pk.team_picked or 'zzzz'
+            return (status_pri, team, pk.player.name)
+        picks_sorted = sorted(picks, key=sort_key)
 
         for pk in picks_sorted:
             row = [pk.player.name, (pk.player.status or '').upper(), pk.team_picked, result_text(pk)]

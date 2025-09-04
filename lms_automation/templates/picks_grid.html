@@ -365,6 +365,13 @@
 
 /* Round view uses vertical scroll inside container */
 .spreadsheet-container.round-view { overflow: auto; }
+
+/* Sticky table header inside round view scroll container */
+.spreadsheet-container.round-view thead th {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
 </style>
 {% endblock %}
 
@@ -633,16 +640,42 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function renderRoundView(data) {
         const playersRaw = data.players || [];
-        let players = sortPlayersForProgress(playersRaw);
+        let players = [...playersRaw];
         players = applySearchFilter(players);
 
         const roundSelect = document.getElementById('roundSelect');
         const activeOnly = document.getElementById('activeOnly');
         const roundNumber = parseInt(roundSelect?.value || currentRoundNumber || 0, 10);
 
+        // Filter active only if toggled
+        const statusVal = p => String(p.status || '').toLowerCase().trim();
         if (activeOnly?.checked) {
-            players = players.filter(p => String(p.status || '').toLowerCase().trim() === 'active');
+            players = players.filter(p => statusVal(p) === 'active');
         }
+
+        // Sort: Active first, then by team picked in selected round (A→Z), then by name.
+        // Players without a pick for the round sort after those with picks.
+        const statusPriority = s => (s === 'active' ? 0 : s === 'winner' ? 1 : 2);
+        const getTeamForRound = p => {
+            const pick = p.picks && p.picks[roundNumber];
+            return pick && pick.team ? pick.team : null;
+        };
+        players.sort((a, b) => {
+            const sa = statusPriority(statusVal(a));
+            const sb = statusPriority(statusVal(b));
+            if (sa !== sb) return sa - sb;
+            const ta = getTeamForRound(a);
+            const tb = getTeamForRound(b);
+            if (ta && tb) {
+                const cmp = ta.localeCompare(tb);
+                if (cmp !== 0) return cmp;
+            } else if (ta && !tb) {
+                return -1;
+            } else if (!ta && tb) {
+                return 1;
+            }
+            return a.name.localeCompare(b.name);
+        });
 
         let html = '<div class="table-responsive"><table class="table table-sm table-hover">';
         html += '<thead class="table-dark"><tr><th>Player</th><th>Pick</th><th>Status</th></tr></thead><tbody>';
