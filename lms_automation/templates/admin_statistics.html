@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}Player Statistics - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">📊 Player Statistics Dashboard</h1>
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+  </div>
+
+  {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <!-- Competition Stats -->
+  <div class="row" id="competitionStats">
+    <div class="col-6 col-md-3 mb-3">
+      <div class="card text-center"><div class="card-body">
+        <div class="h4 mb-0">{{ competition_stats.total_players or '-' }}</div>
+        <small class="text-muted">Total Players</small>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3 mb-3">
+      <div class="card text-center"><div class="card-body">
+        <div class="h4 mb-0">{{ competition_stats.active_players or '-' }}</div>
+        <small class="text-muted">Active</small>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3 mb-3">
+      <div class="card text-center"><div class="card-body">
+        <div class="h4 mb-0">{{ competition_stats.eliminated_players or '-' }}</div>
+        <small class="text-muted">Eliminated</small>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3 mb-3">
+      <div class="card text-center"><div class="card-body">
+        <div class="h4 mb-0">{{ competition_stats.completed_rounds or 0 }}/{{ competition_stats.total_rounds or 0 }}</div>
+        <small class="text-muted">Completed Rounds</small>
+      </div></div>
+    </div>
+  </div>
+
+  <!-- Player Stats Table -->
+  <div class="card mb-4">
+    <div class="card-header"><strong>Individual Player Statistics</strong></div>
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-sm table-striped align-middle mb-0">
+          <thead class="table-dark">
+            <tr>
+              <th>#</th><th>Player</th><th>Status</th><th>Picks</th><th>Wins</th><th>Win%</th><th>Streak</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if player_stats %}
+              {% for p in player_stats %}
+                <tr>
+                  <td>{{ loop.index }}</td>
+                  <td>{{ p.name }}</td>
+                  <td><span class="status-badge status-{{ p.status }}">{{ p.status.upper() }}</span></td>
+                  <td>{{ p.total_picks }}</td>
+                  <td>{{ p.winning_picks }}</td>
+                  <td>{{ p.success_rate }}%</td>
+                  <td>{{ p.current_streak }}</td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr><td colspan="7" class="text-center text-muted">No data</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pick History -->
+  <div class="card">
+    <div class="card-header"><strong>Pick History</strong></div>
+    <div class="card-body">
+      <div class="table-responsive" style="max-height: 420px; overflow:auto;">
+        <table class="table table-sm table-hover align-middle mb-0">
+          <thead class="table-dark">
+            <tr>
+              <th>Round</th><th>Player</th><th>Team</th><th>Result</th><th>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if pick_history %}
+              {% for h in pick_history %}
+                <tr>
+                  <td>R{{ h.round_number }}</td>
+                  <td>{{ h.player_name }}</td>
+                  <td>{{ h.team_picked }}</td>
+                  <td>{{ h.result }}</td>
+                  <td>{{ h.pick_date }}</td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr><td colspan="5" class="text-center text-muted">No history</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+

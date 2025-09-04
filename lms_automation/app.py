@@ -2500,6 +2500,83 @@ def reminders_dashboard():
     current_round = Round.query.filter_by(status='active').first()
     return render_template('reminders_dashboard.html', current_round=current_round)
 
+@app.route('/admin/statistics')
+@admin_required
+def admin_statistics_page():
+    """Standalone Player Statistics Dashboard page (no JS fetch required)."""
+    try:
+        # Competition overview
+        total_players = Player.query.count()
+        active_players = Player.query.filter_by(status='active').count()
+        eliminated_players = Player.query.filter_by(status='eliminated').count()
+        total_rounds = Round.query.count()
+        completed_rounds = Round.query.filter_by(status='completed').count()
+        active_round = Round.query.filter_by(status='active').first()
+
+        # Player stats
+        players = Player.query.all()
+        player_stats = []
+        for player in players:
+            picks = Pick.query.filter_by(player_id=player.id).all()
+            total_picks = len(picks)
+            winning_picks = len([p for p in picks if p.is_winner])
+            teams_used = list(set([p.team_picked for p in picks]))
+            # Current survival streak
+            streak = 0
+            for p in reversed(picks):
+                if p.is_winner is True:
+                    streak += 1
+                elif p.is_winner is False:
+                    break
+            player_stats.append({
+                'name': player.name,
+                'status': player.status,
+                'total_picks': total_picks,
+                'winning_picks': winning_picks,
+                'success_rate': round((winning_picks / total_picks * 100) if total_picks else 0, 1),
+                'current_streak': streak,
+            })
+
+        # Pick history
+        all_picks = Pick.query.join(Player).join(Round).all()
+        pick_history = []
+        for pick in all_picks:
+            pick_history.append({
+                'player_name': pick.player.name,
+                'round_number': pick.round.round_number,
+                'team_picked': team_abbrev(pick.team_picked),
+                'result': 'Winner' if pick.is_winner is True else ('Eliminated' if pick.is_winner is False else 'Pending'),
+                'pick_date': pick.timestamp.strftime('%Y-%m-%d %H:%M') if getattr(pick, 'timestamp', None) else 'Unknown'
+            })
+
+        competition_stats = {
+            'total_players': total_players,
+            'active_players': active_players,
+            'eliminated_players': eliminated_players,
+            'elimination_rate': round((eliminated_players / total_players * 100) if total_players > 0 else 0, 1),
+            'total_rounds': total_rounds,
+            'completed_rounds': completed_rounds,
+            'current_round': active_round.round_number if active_round else None
+        }
+
+        # Order player stats: active first, then success rate desc, then name
+        def ps_key(p):
+            pri = 0 if p['status'] == 'active' else (1 if p['status'] == 'winner' else 2)
+            return (pri, -p['success_rate'], p['name'])
+        player_stats = sorted(player_stats, key=ps_key)
+
+        # Sort pick history by round then name
+        pick_history = sorted(pick_history, key=lambda h: (h['round_number'], h['player_name']))
+
+        return render_template(
+            'admin_statistics.html',
+            competition_stats=competition_stats,
+            player_stats=player_stats,
+            pick_history=pick_history
+        )
+    except Exception as e:
+        return render_template('admin_statistics.html', error=str(e), competition_stats={}, player_stats=[], pick_history=[]), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
