@@ -2071,106 +2071,110 @@ function attachPlayerEventListeners() {
 </script>
 {% endblock %}
     // Player Statistics Modal: fetch and render when opened
+    async function fetchAndRenderStats() {
+        try {
+            const compEl = document.getElementById('competitionStats');
+            const playersEl = document.getElementById('playerStatsTable');
+            const historyEl = document.getElementById('pickHistoryTable');
+            if (compEl) compEl.innerHTML = '<div class="text-center text-muted">Loading competition stats…</div>';
+            if (playersEl) playersEl.innerHTML = '<div class="text-center text-muted">Loading player statistics…</div>';
+            if (historyEl) historyEl.innerHTML = '<div class="text-center text-muted">Loading pick history…</div>';
+
+            const resp = await fetch('/api/statistics', { credentials: 'same-origin' });
+            if (!resp.ok) throw new Error('Failed to load statistics');
+            const data = await resp.json();
+            if (!data.success) throw new Error(data.error || 'Failed to load statistics');
+
+            if (compEl) {
+                const s = data.competition_stats || {};
+                compEl.innerHTML = `
+                    <div class="col-6 col-md-3 mb-3">
+                        <div class="card text-center"><div class="card-body">
+                            <div class="h4 mb-0">${s.total_players ?? '-'}</div>
+                            <small class="text-muted">Total Players</small>
+                        </div></div></div>
+                    <div class="col-6 col-md-3 mb-3">
+                        <div class="card text-center"><div class="card-body">
+                            <div class="h4 mb-0">${s.active_players ?? '-'}</div>
+                            <small class="text-muted">Active</small>
+                        </div></div></div>
+                    <div class="col-6 col-md-3 mb-3">
+                        <div class="card text-center"><div class="card-body">
+                            <div class="h4 mb-0">${s.eliminated_players ?? '-'}</div>
+                            <small class="text-muted">Eliminated</small>
+                        </div></div></div>
+                    <div class="col-6 col-md-3 mb-3">
+                        <div class="card text-center"><div class="card-body">
+                            <div class="h4 mb-0">${s.completed_rounds ?? 0}/${s.total_rounds ?? 0}</div>
+                            <small class="text-muted">Completed Rounds</small>
+                        </div></div></div>
+                `;
+            }
+
+            if (playersEl) {
+                const rows = (data.player_stats || []).map((p, idx) => `
+                    <tr>
+                        <td>${idx + 1}</td>
+                        <td>${p.name}</td>
+                        <td><span class="status-badge status-${p.status}">${String(p.status || '').toUpperCase()}</span></td>
+                        <td>${p.total_picks}</td>
+                        <td>${p.winning_picks}</td>
+                        <td>${p.success_rate}%</td>
+                        <td>${p.current_streak}</td>
+                    </tr>
+                `).join('');
+                playersEl.innerHTML = `
+                    <div class="table-responsive">
+                        <table class="table table-sm table-striped align-middle">
+                            <thead class="table-dark"><tr>
+                                <th>#</th><th>Player</th><th>Status</th><th>Picks</th><th>Wins</th><th>Win%</th><th>Streak</th>
+                            </tr></thead>
+                            <tbody>${rows || '<tr><td colspan="7" class="text-center text-muted">No data</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                `;
+            }
+
+            if (historyEl) {
+                const rows = (data.pick_history || []).slice().sort((a,b)=>{
+                    if (a.round_number !== b.round_number) return a.round_number - b.round_number;
+                    return a.player_name.localeCompare(b.player_name);
+                }).map(h => `
+                    <tr>
+                        <td>R${h.round_number}</td>
+                        <td>${h.player_name}</td>
+                        <td>${h.team_picked}</td>
+                        <td>${h.result}</td>
+                        <td>${h.pick_date || ''}</td>
+                    </tr>
+                `).join('');
+                historyEl.innerHTML = `
+                    <div class="table-responsive" style="max-height: 360px; overflow:auto;">
+                        <table class="table table-sm table-hover align-middle">
+                            <thead class="table-dark"><tr>
+                                <th>Round</th><th>Player</th><th>Team</th><th>Result</th><th>Date</th>
+                            </tr></thead>
+                            <tbody>${rows || '<tr><td colspan="5" class="text-center text-muted">No history</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                `;
+            }
+        } catch (err) {
+            const compEl = document.getElementById('competitionStats');
+            const playersEl = document.getElementById('playerStatsTable');
+            const historyEl = document.getElementById('pickHistoryTable');
+            const msg = (err && err.message) ? err.message : 'Error loading statistics';
+            if (compEl) compEl.innerHTML = `<div class="alert alert-danger">${msg}</div>`;
+            if (playersEl) playersEl.innerHTML = `<div class="alert alert-danger">${msg}</div>`;
+            if (historyEl) historyEl.innerHTML = `<div class="alert alert-danger">${msg}</div>`;
+        }
+    }
+
     const statsModalEl = document.getElementById('statsModal');
     if (statsModalEl) {
-        statsModalEl.addEventListener('shown.bs.modal', async function() {
-            try {
-                // Show loading placeholders
-                const compEl = document.getElementById('competitionStats');
-                const playersEl = document.getElementById('playerStatsTable');
-                const historyEl = document.getElementById('pickHistoryTable');
-                if (compEl) compEl.innerHTML = '<div class="text-center text-muted">Loading competition stats…</div>';
-                if (playersEl) playersEl.innerHTML = '<div class="text-center text-muted">Loading player statistics…</div>';
-                if (historyEl) historyEl.innerHTML = '<div class="text-center text-muted">Loading pick history…</div>';
-
-                const resp = await fetch('/api/statistics');
-                const data = await resp.json();
-                if (!data.success) throw new Error(data.error || 'Failed to load statistics');
-
-                // Render competition stats as cards
-                if (compEl) {
-                    const s = data.competition_stats || {};
-                    compEl.innerHTML = `
-                        <div class="col-6 col-md-3 mb-3">
-                            <div class="card text-center"><div class="card-body">
-                                <div class="h4 mb-0">${s.total_players ?? '-'}</div>
-                                <small class="text-muted">Total Players</small>
-                            </div></div></div>
-                        <div class="col-6 col-md-3 mb-3">
-                            <div class="card text-center"><div class="card-body">
-                                <div class="h4 mb-0">${s.active_players ?? '-'}</div>
-                                <small class="text-muted">Active</small>
-                            </div></div></div>
-                        <div class="col-6 col-md-3 mb-3">
-                            <div class="card text-center"><div class="card-body">
-                                <div class="h4 mb-0">${s.eliminated_players ?? '-'}</div>
-                                <small class="text-muted">Eliminated</small>
-                            </div></div></div>
-                        <div class="col-6 col-md-3 mb-3">
-                            <div class="card text-center"><div class="card-body">
-                                <div class="h4 mb-0">${s.completed_rounds ?? 0}/${s.total_rounds ?? 0}</div>
-                                <small class="text-muted">Completed Rounds</small>
-                            </div></div></div>
-                    `;
-                }
-
-                // Render player stats table
-                if (playersEl) {
-                    const rows = (data.player_stats || []).map((p, idx) => `
-                        <tr>
-                            <td>${idx + 1}</td>
-                            <td>${p.name}</td>
-                            <td><span class="status-badge status-${p.status}">${String(p.status || '').toUpperCase()}</span></td>
-                            <td>${p.total_picks}</td>
-                            <td>${p.winning_picks}</td>
-                            <td>${p.success_rate}%</td>
-                            <td>${p.current_streak}</td>
-                        </tr>
-                    `).join('');
-                    playersEl.innerHTML = `
-                        <div class="table-responsive">
-                            <table class="table table-sm table-striped align-middle">
-                                <thead class="table-dark"><tr>
-                                    <th>#</th><th>Player</th><th>Status</th><th>Picks</th><th>Wins</th><th>Win%</th><th>Streak</th>
-                                </tr></thead>
-                                <tbody>${rows || '<tr><td colspan="7" class="text-center text-muted">No data</td></tr>'}</tbody>
-                            </table>
-                        </div>
-                    `;
-                }
-
-                // Render pick history compact table
-                if (historyEl) {
-                    const rows = (data.pick_history || []).slice().sort((a,b)=>{
-                        if (a.round_number !== b.round_number) return a.round_number - b.round_number;
-                        return a.player_name.localeCompare(b.player_name);
-                    }).map(h => `
-                        <tr>
-                            <td>R${h.round_number}</td>
-                            <td>${h.player_name}</td>
-                            <td>${h.team_picked}</td>
-                            <td>${h.result}</td>
-                            <td>${h.pick_date || ''}</td>
-                        </tr>
-                    `).join('');
-                    historyEl.innerHTML = `
-                        <div class="table-responsive" style="max-height: 360px; overflow:auto;">
-                            <table class="table table-sm table-hover align-middle">
-                                <thead class="table-dark"><tr>
-                                    <th>Round</th><th>Player</th><th>Team</th><th>Result</th><th>Date</th>
-                                </tr></thead>
-                                <tbody>${rows || '<tr><td colspan="5" class="text-center text-muted">No history</td></tr>'}</tbody>
-                            </table>
-                        </div>
-                    `;
-                }
-            } catch (err) {
-                const compEl = document.getElementById('competitionStats');
-                const playersEl = document.getElementById('playerStatsTable');
-                const historyEl = document.getElementById('pickHistoryTable');
-                if (compEl) compEl.innerHTML = `<div class="alert alert-danger">${err.message}</div>`;
-                if (playersEl) playersEl.innerHTML = `<div class="alert alert-danger">${err.message}</div>`;
-                if (historyEl) historyEl.innerHTML = `<div class="alert alert-danger">${err.message}</div>`;
-            }
+        statsModalEl.addEventListener('shown.bs.modal', fetchAndRenderStats);
+        // Also prefetch if user clicks the open button
+        document.querySelectorAll('[data-bs-target="#statsModal"]').forEach(btn => {
+            btn.addEventListener('click', () => setTimeout(fetchAndRenderStats, 0));
         });
     }
