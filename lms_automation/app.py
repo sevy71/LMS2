@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import urllib.parse
 from functools import wraps
+from io import BytesIO
 
 load_dotenv()
 
@@ -1409,6 +1410,168 @@ def export_round_picks_excel():
         response = make_response(''.join(html))
         response.headers['Content-Type'] = 'application/vnd.ms-excel'
         response.headers['Content-Disposition'] = f'attachment; filename=lms_round_{round_obj.round_number}_picks.xls'
+        return response
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/export/picks-grid-xlsx')
+@admin_required
+def export_picks_grid_xlsx():
+    """Export a real .xlsx workbook with eliminated rows highlighted for better compatibility (Numbers/Sheets)."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from flask import make_response
+
+        rounds = Round.query.order_by(Round.round_number).all()
+        players = Player.query.order_by(Player.name).all()
+        picks = Pick.query.all()
+        pick_map = {(p.player_id, p.round_id): p for p in picks}
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Picks Grid'
+
+        # Header
+        header = ['Player', 'Status'] + [f"R{r.round_number}" for r in rounds]
+        ws.append(header)
+        header_fill = PatternFill('solid', fgColor='222222')
+        header_font = Font(color='FFFFFF', bold=True)
+        for col in range(1, len(header) + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        red_fill = PatternFill('solid', fgColor='F8D7DA')
+        red_font = Font(color='842029')
+
+        # Rows
+        for player in players:
+            row = [player.name, (player.status or '').upper()]
+            for r in rounds:
+                pick_obj = pick_map.get((player.id, r.id))
+                if not pick_obj:
+                    row.append('')
+                else:
+                    if pick_obj.is_winner is True:
+                        suffix = ' (W)'
+                    elif pick_obj.is_winner is False:
+                        suffix = ' (L)'
+                    else:
+                        suffix = ' (P)'
+                    row.append(f"{pick_obj.team_picked}{suffix}")
+            ws.append(row)
+
+            # Apply eliminated styling to entire row
+            if (player.status or '').lower() == 'eliminated':
+                r_idx = ws.max_row
+                for c in range(1, len(header) + 1):
+                    cell = ws.cell(row=r_idx, column=c)
+                    cell.fill = red_fill
+                    cell.font = red_font
+
+        # Autosize a bit
+        for col_idx, title in enumerate(header, start=1):
+            width = max(10, min(20, len(title) + 2))
+            if col_idx == 1:
+                width = 22
+            ws.column_dimensions[chr(64 + col_idx)].width = width
+
+        ws.freeze_panes = 'C2'
+
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+
+        response = make_response(bio.getvalue())
+        response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        response.headers['Content-Disposition'] = 'attachment; filename=lms_picks_grid.xlsx'
+        return response
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/export/round-picks-xlsx')
+@admin_required
+def export_round_picks_xlsx():
+    """Export a per-round .xlsx with eliminated rows highlighted."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from flask import make_response
+
+        round_num_param = request.args.get('round', type=int)
+        round_obj = None
+        if round_num_param:
+            round_obj = Round.query.filter_by(round_number=round_num_param).first()
+        if not round_obj:
+            round_obj = Round.query.filter_by(status='active').first()
+        if not round_obj:
+            round_obj = Round.query.order_by(Round.round_number.desc()).first()
+        if not round_obj:
+            return jsonify({'success': False, 'error': 'No rounds available'}), 404
+
+        picks = Pick.query.filter_by(round_id=round_obj.id).join(Player).all()
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = f'Round {round_obj.round_number}'
+
+        header = ['Player', 'Status', 'Team', 'Result']
+        ws.append(header)
+        header_fill = PatternFill('solid', fgColor='222222')
+        header_font = Font(color='FFFFFF', bold=True)
+        for col in range(1, len(header) + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        red_fill = PatternFill('solid', fgColor='F8D7DA')
+        red_font = Font(color='842029')
+
+        def result_text(p):
+            if p.is_winner is True:
+                return 'Winner'
+            if p.is_winner is False:
+                return 'Eliminated'
+            return 'Pending'
+
+        # Sort active first, then by total picks, then name
+        players_total_picks = {p.id: Pick.query.filter_by(player_id=p.id).count() for p in Player.query.all()}
+        picks_sorted = sorted(
+            picks,
+            key=lambda pk: (
+                0 if pk.player.status == 'active' else (1 if pk.player.status == 'winner' else 2),
+                -players_total_picks.get(pk.player.id, 0),
+                pk.player.name,
+            ),
+        )
+
+        for pk in picks_sorted:
+            row = [pk.player.name, (pk.player.status or '').upper(), pk.team_picked, result_text(pk)]
+            ws.append(row)
+            if (pk.player.status or '').lower() == 'eliminated':
+                r_idx = ws.max_row
+                for c in range(1, len(header) + 1):
+                    cell = ws.cell(row=r_idx, column=c)
+                    cell.fill = red_fill
+                    cell.font = red_font
+
+        # Autosize
+        ws.column_dimensions['A'].width = 24
+        ws.column_dimensions['B'].width = 12
+        ws.column_dimensions['C'].width = 18
+        ws.column_dimensions['D'].width = 12
+        ws.freeze_panes = 'A2'
+
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+
+        response = make_response(bio.getvalue())
+        response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        response.headers['Content-Disposition'] = f'attachment; filename=lms_round_{round_obj.round_number}_picks.xlsx'
         return response
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

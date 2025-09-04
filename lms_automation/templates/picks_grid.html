@@ -892,7 +892,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const exportGridExcelBtn = document.getElementById('exportGridExcel');
         if (exportGridExcelBtn) {
             exportGridExcelBtn.addEventListener('click', function() {
-                window.location.href = '/api/export/picks-grid-excel';
+                window.location.href = '/api/export/picks-grid-xlsx';
             });
         }
         const exportRoundBtn = document.getElementById('exportRound');
@@ -910,7 +910,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const roundSelect = document.getElementById('roundSelect');
                 const r = roundSelect && roundSelect.value ? roundSelect.value : '';
                 const qs = r ? `?round=${encodeURIComponent(r)}` : '';
-                window.location.href = `/api/export/round-picks-excel${qs}`;
+                window.location.href = `/api/export/round-picks-xlsx${qs}`;
             });
         }
     }
