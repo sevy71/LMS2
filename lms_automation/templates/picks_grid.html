@@ -21,6 +21,9 @@
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="viewPlayer">Player View</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="viewRound">Round View</button>
                 </div>
+                <button type="button" class="btn btn-sm btn-outline-primary d-sm-none" id="toggleMobileRounds" style="display:none;">
+                    Show all rounds
+                </button>
             </div>
             <div class="d-flex align-items-center gap-2 flex-wrap controls-scroll">
                 <div class="input-group input-group-sm" style="max-width: 320px;">
@@ -422,12 +425,14 @@ let gridData = null;
 let currentSort = 'progress';
 let currentView = 'player'; // 'player' | 'round'
 let currentRoundNumber = null;
+let showAllMobileRounds = false; // player view compaction toggle
 
 document.addEventListener('DOMContentLoaded', function() {
     const gridContainer = document.getElementById('grid-container');
 
     // Default to Round view on small screens
-    if (window.matchMedia && window.matchMedia('(max-width: 576px)').matches) {
+    const isMobile = window.matchMedia && window.matchMedia('(max-width: 576px)').matches;
+    if (isMobile) {
         currentView = 'round';
     }
 
@@ -487,12 +492,18 @@ document.addEventListener('DOMContentLoaded', function() {
             if (container) container.classList.add('round-view');
             renderRoundView(gridData);
             setActiveViewButton('viewRound');
+            // hide mobile rounds toggle in round view
+            const tgl = document.getElementById('toggleMobileRounds');
+            if (tgl) tgl.style.display = 'none';
         } else {
             document.getElementById('roundControls').style.display = 'none';
             const container = document.getElementById('grid-container');
             if (container) container.classList.remove('round-view');
             renderGrid(gridData, currentSort);
             setActiveViewButton('viewPlayer');
+            // show mobile rounds toggle only on mobile
+            const tgl = document.getElementById('toggleMobileRounds');
+            if (tgl) tgl.style.display = isMobile ? 'inline-block' : 'none';
         }
     }
 
@@ -562,6 +573,10 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
+        // Determine which round columns to render (compact on mobile)
+        const compactMobile = isMobile && !showAllMobileRounds;
+        const roundsToRender = compactMobile ? rounds.slice(-2) : rounds;
+
         // Create spreadsheet grid structure
         let gridHtml = '<div class="spreadsheet-grid" style="grid-template-columns: 180px 1fr;">';
         
@@ -570,16 +585,18 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Headers
         gridHtml += '<div class="grid-headers">';
-        rounds.forEach((roundNumber, index) => {
+        roundsToRender.forEach((roundNumber, index) => {
             gridHtml += `<div class="header-cell" data-round="${roundNumber}" data-col-index="${index}">
                 R${roundNumber}
                 <div class="resize-handle" data-col-index="${index}"></div>
             </div>`;
         });
-        gridHtml += `<div class="header-cell" data-col-index="${rounds.length}">
-            Status
-            <div class="resize-handle" data-col-index="${rounds.length}"></div>
-        </div>`;
+        if (!compactMobile) {
+            gridHtml += `<div class="header-cell" data-col-index="${roundsToRender.length}">
+                Status
+                <div class="resize-handle" data-col-index="${roundsToRender.length}"></div>
+            </div>`;
+        }
         gridHtml += '</div>';
         
         // Name column
@@ -614,15 +631,17 @@ document.addEventListener('DOMContentLoaded', function() {
             gridHtml += '<div class="data-row">';
             
             // Round columns
-            rounds.forEach(roundNumber => {
+            roundsToRender.forEach(roundNumber => {
                 const pickData = player.picks[roundNumber];
                 const pickInfo = getPickInfo(pickData, roundNumber);
                 gridHtml += `<div class="data-cell ${pickInfo.class}" title="${pickInfo.tooltip}">${pickInfo.display}</div>`;
             });
 
-            // Status column
-            const statusBadge = `<span class="status-badge status-${player.status}">${player.status.toUpperCase()}</span>`;
-            gridHtml += `<div class="data-cell">${statusBadge}</div>`;
+            // Status column (hidden in compact mobile)
+            if (!compactMobile) {
+                const statusBadge = `<span class="status-badge status-${player.status}">${player.status.toUpperCase()}</span>`;
+                gridHtml += `<div class="data-cell">${statusBadge}</div>`;
+            }
 
             gridHtml += '</div>';
         });
@@ -635,7 +654,9 @@ document.addEventListener('DOMContentLoaded', function() {
         syncScrolling();
         
         // Setup column resizing
-        setupColumnResizing();
+        if (!compactMobile) {
+            setupColumnResizing();
+        }
     }
 
     function renderRoundView(data) {
@@ -853,6 +874,18 @@ document.addEventListener('DOMContentLoaded', function() {
             currentView = 'round';
             renderByView();
         });
+
+        // Mobile rounds toggle
+        const toggleBtn = document.getElementById('toggleMobileRounds');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', function() {
+                showAllMobileRounds = !showAllMobileRounds;
+                this.textContent = showAllMobileRounds ? 'Show fewer rounds' : 'Show all rounds';
+                // Keep in player view when toggling
+                currentView = 'player';
+                renderByView();
+            });
+        }
 
         // Sort by name
         document.getElementById('sortByName').addEventListener('click', function() {
