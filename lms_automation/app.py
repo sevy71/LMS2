@@ -1281,7 +1281,7 @@ def export_picks_grid_csv():
                 suffix = ' (L)'
             else:
                 suffix = ' (P)'
-            return f"{pick_obj.team_picked}{suffix}"
+            return f"{team_abbrev(pick_obj.team_picked)}{suffix}"
 
         output = StringIO()
         writer = csv.writer(output)
@@ -1347,7 +1347,7 @@ def export_round_picks_csv():
                 result = 'Eliminated'
             else:
                 result = 'Pending'
-            writer.writerow([f"R{round_obj.round_number}", pick.player.name, pick.team_picked, result])
+            writer.writerow([f"R{round_obj.round_number}", pick.player.name, team_abbrev(pick.team_picked), result])
 
         response = make_response(output.getvalue())
         response.headers['Content-Type'] = 'text/csv'
