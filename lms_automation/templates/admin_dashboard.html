@@ -2176,18 +2176,18 @@ function attachPlayerEventListeners() {
 
     const statsModalEl = document.getElementById('statsModal');
     if (statsModalEl) {
+        // Fetch only when modal is shown to avoid interacting with hidden content
         statsModalEl.addEventListener('shown.bs.modal', fetchAndRenderStats);
-        // Also prefetch if user clicks the open button
-        document.querySelectorAll('[data-bs-target="#statsModal"]').forEach(btn => {
-            btn.addEventListener('click', () => setTimeout(fetchAndRenderStats, 0));
+        // Ensure focus does not remain inside when hidden (fix aria-hidden warning)
+        statsModalEl.addEventListener('hidden.bs.modal', function() {
+            if (statsModalEl.contains(document.activeElement)) {
+                try { document.activeElement.blur(); } catch (e) {}
+            }
         });
         // Reload button
         const reloadBtn = document.getElementById('statsReloadBtn');
         if (reloadBtn) reloadBtn.addEventListener('click', fetchAndRenderStats);
     }
 
-    // Fallback: attempt initial fetch on page load (content exists in DOM even if modal closed)
-    fetchAndRenderStats();
-
-    // Expose for inline handlers
+    // Expose for inline handlers and debugging
     window.fetchAndRenderStats = fetchAndRenderStats;
