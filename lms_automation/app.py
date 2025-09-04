@@ -39,6 +39,47 @@ migrate = Migrate(app, db)
 # Admin authentication
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')  # Change this!
 
+# --- Helpers ---
+def team_abbrev(team_name: str) -> str:
+    if not team_name:
+        return ''
+    mapping = {
+        'Arsenal': 'ARS',
+        'Aston Villa': 'AVFC',
+        'Aston Villa FC': 'AVFC',
+        'AFC Bournemouth': 'BOU',
+        'Bournemouth': 'BOU',
+        'Bournemouth AFC': 'BOU',
+        'Brentford': 'BRE',
+        'Brighton': 'BHA',
+        'Brighton & Hove Albion': 'BHA',
+        'Burnley': 'BUR',
+        'Chelsea': 'CHE',
+        'Crystal Palace': 'CRY',
+        'Everton': 'EVE',
+        'Everton FC': 'EVE',
+        'Fulham': 'FUL',
+        'Liverpool': 'LIV',
+        'Liverpool FC': 'LIV',
+        'Luton Town': 'LUT',
+        'Manchester City': 'MCI',
+        'Manchester City FC': 'MCI',
+        'Manchester United': 'MUN',
+        'Manchester United FC': 'MUN',
+        'Newcastle': 'NEW',
+        'Newcastle United': 'NEW',
+        'Nottingham Forest': 'NOT',
+        'Sheffield United': 'SHE',
+        'Tottenham': 'TOT',
+        'Tottenham Hotspur': 'TOT',
+        'Tottenham Hotspur FC': 'TOT',
+        'West Ham': 'WHU',
+        'West Ham United': 'WHU',
+        'Wolves': 'WOL',
+        'Wolverhampton Wanderers': 'WOL'
+    }
+    return mapping.get(team_name, team_name[:3].upper())
+
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -1475,7 +1516,7 @@ def export_picks_grid_xlsx():
                         suffix = ' (L)'
                     else:
                         suffix = ' (P)'
-                    row.append(f"{pick_obj.team_picked}{suffix}")
+                    row.append(f"{team_abbrev(pick_obj.team_picked)}{suffix}")
             ws.append(row)
 
             # Apply eliminated styling to entire row
@@ -1495,6 +1536,10 @@ def export_picks_grid_xlsx():
 
         # Freeze header row and column A (Player)
         ws.freeze_panes = 'B2'
+
+        # Enable filter on header so sorts treat row 1 as header
+        last_col_letter = get_column_letter(len(header))
+        ws.auto_filter.ref = f"A1:{last_col_letter}{ws.max_row}"
 
         bio = BytesIO()
         wb.save(bio)
@@ -1562,7 +1607,7 @@ def export_round_picks_xlsx():
         picks_sorted = sorted(picks, key=sort_key)
 
         for pk in picks_sorted:
-            row = [pk.player.name, (pk.player.status or '').upper(), pk.team_picked, result_text(pk)]
+            row = [pk.player.name, (pk.player.status or '').upper(), team_abbrev(pk.team_picked), result_text(pk)]
             ws.append(row)
             if (pk.player.status or '').lower() == 'eliminated':
                 r_idx = ws.max_row
@@ -1578,6 +1623,9 @@ def export_round_picks_xlsx():
         ws.column_dimensions['D'].width = 12
         # Freeze header row and column A (Player)
         ws.freeze_panes = 'B2'
+
+        # Enable filter on header row
+        ws.auto_filter.ref = f"A1:D{ws.max_row}"
 
         bio = BytesIO()
         wb.save(bio)
