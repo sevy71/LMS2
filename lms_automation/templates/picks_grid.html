@@ -33,7 +33,10 @@
                     <button type="button" class="btn btn-outline-success btn-sm d-none d-sm-inline-block" id="sortByLatestRound">🎲 Sort by Latest Round</button>
                     <button type="button" class="btn btn-outline-dark btn-sm" id="sortByProgress">🔢 Active → Teams Picked</button>
                     <button type="button" class="btn btn-outline-info btn-sm d-none d-sm-inline-block" id="adjustColumns">📊 Adjust Columns</button>
-                    <button type="button" class="btn btn-outline-secondary btn-sm" id="exportGrid">⬇️ Export Grid CSV</button>
+                    <div class="btn-group">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="exportGrid">⬇️ Export Grid CSV</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="exportGridExcel">⬇️ Export Grid Excel</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -500,6 +503,12 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
+        // Optional: filter active-only if toggle is on (applies to both views if set)
+        const activeOnlyToggle = document.getElementById('activeOnly');
+        if (activeOnlyToggle && activeOnlyToggle.checked) {
+            players = players.filter(p => String(p.status || '').toLowerCase().trim() === 'active');
+        }
+
         // Sort players
         if (sortBy === 'progress') {
             players = sortPlayersForProgress(players);
@@ -621,7 +630,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const roundNumber = parseInt(roundSelect?.value || currentRoundNumber || 0, 10);
 
         if (activeOnly?.checked) {
-            players = players.filter(p => (p.status || '').toLowerCase() === 'active');
+            players = players.filter(p => String(p.status || '').toLowerCase().trim() === 'active');
         }
 
         let html = '<div class="table-responsive"><table class="table table-sm table-hover">';
@@ -869,6 +878,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 window.location.href = '/api/export/picks-grid';
             });
         }
+        const exportGridExcelBtn = document.getElementById('exportGridExcel');
+        if (exportGridExcelBtn) {
+            exportGridExcelBtn.addEventListener('click', function() {
+                window.location.href = '/api/export/picks-grid-excel';
+            });
+        }
         const exportRoundBtn = document.getElementById('exportRound');
         if (exportRoundBtn) {
             exportRoundBtn.addEventListener('click', function() {
@@ -876,6 +891,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 const r = roundSelect && roundSelect.value ? roundSelect.value : '';
                 const qs = r ? `?round=${encodeURIComponent(r)}` : '';
                 window.location.href = `/api/export/round-picks${qs}`;
+            });
+        }
+        const exportRoundExcelBtn = document.getElementById('exportRoundExcel');
+        if (exportRoundExcelBtn) {
+            exportRoundExcelBtn.addEventListener('click', function() {
+                const roundSelect = document.getElementById('roundSelect');
+                const r = roundSelect && roundSelect.value ? roundSelect.value : '';
+                const qs = r ? `?round=${encodeURIComponent(r)}` : '';
+                window.location.href = `/api/export/round-picks-excel${qs}`;
             });
         }
     }

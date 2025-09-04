@@ -1314,6 +1314,104 @@ def export_round_picks_csv():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/export/picks-grid-excel')
+@admin_required
+def export_picks_grid_excel():
+    """Export a formatted Excel-compatible HTML table with eliminated rows highlighted."""
+    try:
+        from flask import make_response
+
+        rounds = Round.query.order_by(Round.round_number).all()
+        players = Player.query.order_by(Player.name).all()
+        picks = Pick.query.all()
+        pick_map = {(p.player_id, p.round_id): p for p in picks}
+
+        def pick_cell(pick_obj):
+            if not pick_obj:
+                return ''
+            if pick_obj.is_winner is True:
+                suffix = ' (W)'
+            elif pick_obj.is_winner is False:
+                suffix = ' (L)'
+            else:
+                suffix = ' (P)'
+            return f"{pick_obj.team_picked}{suffix}"
+
+        # Build HTML
+        html = []
+        html.append('<html><head><meta charset="utf-8">')
+        html.append('<style>table{border-collapse:collapse;font-family:Arial,sans-serif} td,th{border:1px solid #999;padding:6px 8px} th{background:#222;color:#fff} .row-elim td{background:#f8d7da !important;color:#842029} .status-badge{padding:2px 6px;border-radius:10px;font-weight:700} .status-active{background:#198754;color:#fff} .status-eliminated{background:#dc3545;color:#fff} .status-winner{background:#0d6efd;color:#fff}</style>')
+        html.append('</head><body>')
+        html.append('<table>')
+        # Header
+        html.append('<tr><th>Player</th><th>Status</th>')
+        for r in rounds:
+            html.append(f'<th>R{r.round_number}</th>')
+        html.append('</tr>')
+        # Rows
+        for player in players:
+            row_class = 'row-elim' if (player.status or '').lower() == 'eliminated' else ''
+            status_class = f"status-{(player.status or '').lower()}"
+            html.append(f'<tr class="{row_class}"><td>{player.name}</td><td><span class="status-badge {status_class}">{(player.status or '').upper()}</span></td>')
+            for r in rounds:
+                html.append(f'<td>{pick_cell(pick_map.get((player.id, r.id)))}</td>')
+            html.append('</tr>')
+        html.append('</table></body></html>')
+
+        response = make_response(''.join(html))
+        response.headers['Content-Type'] = 'application/vnd.ms-excel'
+        response.headers['Content-Disposition'] = 'attachment; filename=lms_picks_grid.xls'
+        return response
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/export/round-picks-excel')
+@admin_required
+def export_round_picks_excel():
+    """Export a formatted per-round table with eliminated rows highlighted."""
+    try:
+        from flask import make_response
+
+        round_num_param = request.args.get('round', type=int)
+        round_obj = None
+        if round_num_param:
+            round_obj = Round.query.filter_by(round_number=round_num_param).first()
+        if not round_obj:
+            round_obj = Round.query.filter_by(status='active').first()
+        if not round_obj:
+            round_obj = Round.query.order_by(Round.round_number.desc()).first()
+        if not round_obj:
+            return jsonify({'success': False, 'error': 'No rounds available'}), 404
+
+        picks = Pick.query.filter_by(round_id=round_obj.id).join(Player).all()
+
+        html = []
+        html.append('<html><head><meta charset="utf-8">')
+        html.append('<style>table{border-collapse:collapse;font-family:Arial,sans-serif} td,th{border:1px solid #999;padding:6px 8px} th{background:#222;color:#fff} .row-elim td{background:#f8d7da !important;color:#842029} .status-badge{padding:2px 6px;border-radius:10px;font-weight:700} .status-active{background:#198754;color:#fff} .status-eliminated{background:#dc3545;color:#fff} .status-winner{background:#0d6efd;color:#fff}</style>')
+        html.append('</head><body>')
+        html.append(f'<h3>Round {round_obj.round_number} Picks</h3>')
+        html.append('<table>')
+        html.append('<tr><th>Player</th><th>Status</th><th>Team</th><th>Result</th></tr>')
+        for pick in picks:
+            status = (pick.player.status or '').lower()
+            row_class = 'row-elim' if status == 'eliminated' else ''
+            if pick.is_winner is True:
+                result = 'Winner'
+            elif pick.is_winner is False:
+                result = 'Eliminated'
+            else:
+                result = 'Pending'
+            status_badge = f"<span class='status-badge status-{status}'>{status.upper()}</span>"
+            html.append(f"<tr class='{row_class}'><td>{pick.player.name}</td><td>{status_badge}</td><td>{pick.team_picked}</td><td>{result}</td></tr>")
+        html.append('</table></body></html>')
+
+        response = make_response(''.join(html))
+        response.headers['Content-Type'] = 'application/vnd.ms-excel'
+        response.headers['Content-Disposition'] = f'attachment; filename=lms_round_{round_obj.round_number}_picks.xls'
+        return response
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/rounds/<int:round_id>/process-results', methods=['POST'])
 @admin_required  
 def process_round_results(round_id):
