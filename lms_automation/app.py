@@ -1081,7 +1081,7 @@ def get_statistics():
                 'round_number': pick.round.round_number,
                 'team_picked': pick.team_picked,
                 'result': 'Winner' if pick.is_winner == True else ('Eliminated' if pick.is_winner == False else 'Pending'),
-                'pick_date': pick.created_at.strftime('%Y-%m-%d %H:%M') if pick.created_at else 'Unknown'
+                'pick_date': pick.timestamp.strftime('%Y-%m-%d %H:%M') if getattr(pick, 'timestamp', None) else 'Unknown'
             })
         
         return jsonify({
@@ -1160,11 +1160,11 @@ def export_data(export_type):
                     pick.id,
                     pick.player.name,
                     pick.round.round_number,
-                    pick.team_picked,
+                    team_abbrev(pick.team_picked),
                     result,
                     pick.is_winner,
                     pick.is_eliminated,
-                    pick.created_at.strftime('%Y-%m-%d %H:%M:%S') if pick.created_at else ''
+                    pick.timestamp.strftime('%Y-%m-%d %H:%M:%S') if getattr(pick, 'timestamp', None) else ''
                 ])
             
             filename = 'lms_picks.csv'
