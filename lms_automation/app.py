@@ -80,6 +80,98 @@ def team_abbrev(team_name: str) -> str:
     }
     return mapping.get(team_name, team_name[:3].upper())
 
+def generate_picks_grid_xlsx():
+    """Generate XLSX file for picks grid. Returns BytesIO object."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from openpyxl.utils import get_column_letter
+
+        rounds = Round.query.order_by(Round.round_number).all()
+        players = Player.query.order_by(Player.name).all()
+        picks = Pick.query.all()
+        pick_map = {(p.player_id, p.round_id): p for p in picks}
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Picks Grid'
+
+        # Header
+        header = ['Player', 'Status'] + [f"R{r.round_number}" for r in rounds]
+        ws.append(header)
+        header_fill = PatternFill('solid', fgColor='222222')
+        header_font = Font(color='FFFFFF', bold=True)
+        for col in range(1, len(header) + 1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        red_fill = PatternFill('solid', fgColor='F8D7DA')
+        red_font = Font(color='842029')
+
+        # Determine latest round for secondary sort
+        latest_round = max(rounds, key=lambda r: r.round_number) if rounds else None
+
+        # Sort players: Active → latest round team (A→Z, players with no pick last) → name
+        def sort_key(player):
+            status = (player.status or '').lower()
+            status_pri = 0 if status == 'active' else (1 if status == 'winner' else 2)
+            team = None
+            if latest_round:
+                pk = pick_map.get((player.id, latest_round.id))
+                team = pk.team_picked if pk else None
+            # Players with a team come first (0), then alphabetically; None teams last (1)
+            team_presence = 0 if team else 1
+            return (status_pri, team_presence, (team or 'zzzz'), player.name)
+
+        for player in sorted(players, key=sort_key):
+            row = [player.name, (player.status or '').upper()]
+            for r in rounds:
+                pick_obj = pick_map.get((player.id, r.id))
+                if not pick_obj:
+                    row.append('')
+                else:
+                    if pick_obj.is_winner is True:
+                        suffix = ' (W)'
+                    elif pick_obj.is_winner is False:
+                        suffix = ' (L)'
+                    else:
+                        suffix = ' (P)'
+                    row.append(f"{team_abbrev(pick_obj.team_picked)}{suffix}")
+            ws.append(row)
+
+            # Apply eliminated styling to entire row
+            if (player.status or '').lower() == 'eliminated':
+                r_idx = ws.max_row
+                for c in range(1, len(header) + 1):
+                    cell = ws.cell(row=r_idx, column=c)
+                    cell.fill = red_fill
+                    cell.font = red_font
+
+        # Autosize columns
+        for col_idx, title in enumerate(header, start=1):
+            width = max(10, min(20, len(title) + 2))
+            if col_idx == 1:
+                width = 22
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+        # Freeze header row and column A (Player)
+        ws.freeze_panes = 'B2'
+
+        # Enable filter on header so sorts treat row 1 as header
+        last_col_letter = get_column_letter(len(header))
+        ws.auto_filter.ref = f"A1:{last_col_letter}{ws.max_row}"
+
+        bio = BytesIO()
+        wb.save(bio)
+        bio.seek(0)
+        return bio
+        
+    except Exception as e:
+        print(f"Error generating XLSX: {e}")
+        return None
+
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -1638,6 +1730,23 @@ def export_round_picks_xlsx():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/download-export/<filename>')
+def download_export_file(filename):
+    """Download an exported file from the exports directory"""
+    try:
+        # Security: only allow downloading files from exports directory with specific pattern
+        if not filename.startswith('lms_picks_grid_after_round_') or not filename.endswith('.xlsx'):
+            return "File not found", 404
+        
+        filepath = os.path.join('exports', filename)
+        if not os.path.exists(filepath):
+            return "File not found", 404
+        
+        from flask import send_file
+        return send_file(filepath, as_attachment=True, download_name=filename)
+    except Exception as e:
+        return f"Error downloading file: {str(e)}", 500
+
 @app.route('/api/rounds/<int:round_id>/process-results', methods=['POST'])
 @admin_required  
 def process_round_results(round_id):
@@ -1711,12 +1820,31 @@ def process_round_results(round_id):
         
         db.session.commit()
         
+        # Auto-generate XLSX file after processing results
+        xlsx_file = generate_picks_grid_xlsx()
+        xlsx_filename = None
+        
+        if xlsx_file:
+            # Save the file to disk for direct WhatsApp sharing
+            try:
+                os.makedirs('exports', exist_ok=True)
+                xlsx_filename = f'lms_picks_grid_after_round_{round_id}.xlsx'
+                filepath = f'exports/{xlsx_filename}'
+                with open(filepath, 'wb') as f:
+                    f.write(xlsx_file.getvalue())
+                print(f"XLSX file automatically generated after processing round {round_id} results: {filepath}")
+                
+            except Exception as e:
+                print(f"Warning: Could not save XLSX file to disk: {e}")
+        
         return jsonify({
             'success': True,
             'eliminated_players': list(set(eliminated_players)),
             'surviving_players': list(set(surviving_players)),
             'total_eliminated': len(set(eliminated_players)),
-            'total_surviving': len(set(surviving_players))
+            'total_surviving': len(set(surviving_players)),
+            'xlsx_generated': xlsx_file is not None,
+            'xlsx_filename': xlsx_filename
         })
         
     except Exception as e:

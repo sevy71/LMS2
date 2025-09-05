@@ -1878,9 +1878,21 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                alert(`Results processed successfully!\n\nEliminated players: ${data.total_eliminated}\nSurviving players: ${data.total_surviving}`);
+                let message = `Results processed successfully!\n\nEliminated players: ${data.total_eliminated}\nSurviving players: ${data.total_surviving}`;
+                
+                // Show simple file ready notification if XLSX was generated
+                if (data.xlsx_generated && data.xlsx_filename) {
+                    message += '\n\n📊 XLSX file generated automatically!';
+                    
+                    // Show simple download notification
+                    showFileReadyModal(data.xlsx_filename, data.total_eliminated, data.total_surviving);
+                }
+                
+                alert(message);
                 document.getElementById('resultsModal').querySelector('[data-bs-dismiss="modal"]').click();
-                location.reload();
+                if (!data.xlsx_generated) {
+                    location.reload(); // Only reload if not showing file modal
+                }
             } else {
                 alert('Error processing results: ' + data.error);
             }
@@ -2190,5 +2202,81 @@ function attachPlayerEventListeners() {
 
     // Expose for inline handlers and debugging
     window.fetchAndRenderStats = fetchAndRenderStats;
+    
+    // Simple file ready for WhatsApp sharing
+    function showFileReadyModal(filename, eliminated, surviving) {
+        // Create modal if it doesn't exist
+        let modal = document.getElementById('fileReadyModal');
+        if (!modal) {
+            const modalHtml = `
+                <div class="modal fade" id="fileReadyModal" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <div class="modal-header bg-success text-white">
+                                <h5 class="modal-title">
+                                    <i class="fas fa-check-circle me-2"></i>File Ready for WhatsApp
+                                </h5>
+                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                            </div>
+                            <div class="modal-body text-center">
+                                <div class="alert alert-success">
+                                    <h6><i class="fas fa-file-excel me-2"></i>XLSX File Generated!</h6>
+                                    <p class="mb-0">Updated picks grid with eliminated players highlighted in red.</p>
+                                </div>
+                                
+                                <div class="my-4">
+                                    <h6>Results Summary:</h6>
+                                    <div class="row">
+                                        <div class="col-6">
+                                            <div class="text-danger">
+                                                <strong id="eliminatedCount"></strong>
+                                                <br>Eliminated
+                                            </div>
+                                        </div>
+                                        <div class="col-6">
+                                            <div class="text-success">
+                                                <strong id="survivingCount"></strong>
+                                                <br>Surviving
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <a href="#" class="btn btn-primary btn-lg mb-3" id="downloadFileBtn" download>
+                                    <i class="fas fa-download me-2"></i>Download XLSX File
+                                </a>
+                                
+                                <div class="alert alert-info">
+                                    <h6><i class="fab fa-whatsapp me-2"></i>Ready to share:</h6>
+                                    <p class="mb-0 small">
+                                        1. Click "Download XLSX File" above<br>
+                                        2. Go to your WhatsApp group<br>
+                                        3. Attach the file and send it directly to the group
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                                <button type="button" class="btn btn-outline-primary" onclick="location.reload()">
+                                    <i class="fas fa-sync me-1"></i>Refresh Dashboard
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', modalHtml);
+            modal = document.getElementById('fileReadyModal');
+        }
+        
+        // Update modal content
+        document.getElementById('eliminatedCount').textContent = eliminated;
+        document.getElementById('survivingCount').textContent = surviving;
+        document.getElementById('downloadFileBtn').href = `/download-export/${filename}`;
+        
+        // Show modal
+        const bsModal = new bootstrap.Modal(modal);
+        bsModal.show();
+    }
 </script>
 {% endblock %}
