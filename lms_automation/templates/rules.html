@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Rules - Last Man Standing{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-lg-10 col-xl-8 mx-auto">
+    <h1 class="mt-4 mb-3">Game Rules</h1>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5>Overview</h5>
+        <p>
+          Pick one team each round. If your team wins, you advance. If it loses, you’re eliminated. 
+          Teams can’t be used more than once per cycle.
+        </p>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5>Game Length & Cycles</h5>
+        <ul class="mb-0">
+          <li>Each cycle is a maximum of 20 rounds.</li>
+          <li>If Round 20 completes and at least one player remains active, a new cycle starts with only the active players. Those players regain all 20 teams as available.</li>
+          <li>If all players are eliminated in any round, a new cycle starts with all players reinstated as active and all 20 teams available.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5>Round Eligibility</h5>
+        <ul class="mb-0">
+          <li>A round proceeds only if every active player has at least one eligible team to pick (eligible = playing this round and not previously chosen in the current cycle).</li>
+          <li>Early-round choice aim: Up to Round 10 we generally target ≥3 options per player; Rounds 11–20 ≥2. In later rounds, one option may remain. This guidance won’t block a round as long as each active player has ≥1 eligible team.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5>Missed Picks (Auto-Pick)</h5>
+        <ul class="mb-0">
+          <li>If a player misses the deadline, an auto-pick is applied:</li>
+          <li class="mt-2"><strong>Order</strong>: (1) Walk the player’s past picks from most recent to oldest and take the opposing team (the loser in that past match) if eligible this round; if none, (2) assign the first eligible team alphabetically among teams not yet used this cycle.</li>
+          <li>No eligible team should not occur under round eligibility. If late fixture changes cause it, a bye may be granted at admins’ discretion.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5>Postponements</h5>
+        <ul class="mb-0">
+          <li>Use the round’s first kickoff time as reference.</li>
+          <li><strong>Early (≥ 60 min before first kickoff)</strong>: Player may re-pick; original team does not count as used. To qualify, the original pick must have been made before the official postponement announcement and at least 120 min before first kickoff.</li>
+          <li><strong>Late (&lt; 60 min before first kickoff or after kickoff)</strong>: Player receives a bye to the next round; the originally picked team counts as used.</li>
+          <li>Same rules apply to auto-picked teams. We notify affected players and record the reason.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body">
+        <h5>Special Measures</h5>
+        <p class="mb-0">
+          In unusual circumstances (e.g., widespread postponements), admins may apply special measures such as a universal bye, freezing or voiding a round, or overriding outcomes with a note for transparency.
+        </p>
+      </div>
+    </div>
+
+    <div class="text-muted mb-5">
+      Last updated: Policy v1
+    </div>
+  </div>
+  
+</div>
+{% endblock %}

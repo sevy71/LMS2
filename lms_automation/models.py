@@ -28,6 +28,10 @@ class Round(db.Model):
     start_date = db.Column(db.DateTime, nullable=True)
     end_date = db.Column(db.DateTime, nullable=True)
     status = db.Column(db.String(20), default='pending')  # pending, active, completed
+    first_kickoff_at = db.Column(db.DateTime, nullable=True)
+    special_measure = db.Column(db.String(50), nullable=True)  # universal_bye, frozen, void, override
+    special_note = db.Column(db.Text, nullable=True)
+    cycle_number = db.Column(db.Integer, default=1)
     
     fixtures = db.relationship('Fixture', backref='round', lazy=True)
     picks = db.relationship('Pick', backref='round', lazy=True)
@@ -63,6 +67,12 @@ class Pick(db.Model):
     is_eliminated = db.Column(db.Boolean, default=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     last_edited_at = db.Column(db.DateTime, nullable=True)
+    
+    # Audit fields for auto-pick/postponement policy
+    auto_assigned = db.Column(db.Boolean, default=False)
+    auto_reason = db.Column(db.String(50), nullable=True)  # missed_deadline, postponement_early, postponement_late, etc.
+    postponed_event_id = db.Column(db.String(50), nullable=True)
+    announcement_time = db.Column(db.DateTime, nullable=True)
     
     def __repr__(self):
         return f'<Pick {self.player.name} - {self.team_picked}>'

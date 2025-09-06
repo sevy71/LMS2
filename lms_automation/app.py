@@ -36,6 +36,45 @@ from models import db, Player, Round, Fixture, Pick, PickToken, ReminderSchedule
 db.init_app(app)
 migrate = Migrate(app, db)
 
+# --- Game policy configuration ---
+# Postponement policy thresholds (minutes)
+app.config.setdefault('POSTPONEMENT_LENIENCY_MINUTES', 60)   # early postponement window
+app.config.setdefault('EARLY_PICK_WINDOW_MINUTES', 120)      # pick must predate kickoff by this to qualify
+
+# Cycles and rounds
+app.config.setdefault('MAX_ROUNDS_PER_CYCLE', 20)
+
+# Eligibility guidance thresholds (non-blocking guidance; hard gate is >=1 eligible team)
+app.config.setdefault('EARLY_ROUND_MAX', 10)
+app.config.setdefault('MID_ROUND_MAX', 20)
+
+# --- Logging helpers ---
+def log_auto_pick(pick: Pick, reason: str, postponed_event_id: str = None, announcement_time: datetime = None):
+    """Record that a pick was auto-assigned with policy context."""
+    try:
+        pick.auto_assigned = True
+        pick.auto_reason = reason
+        if postponed_event_id:
+            pick.postponed_event_id = postponed_event_id
+        if announcement_time:
+            pick.announcement_time = announcement_time
+        db.session.add(pick)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Failed to log auto pick for pick_id={getattr(pick, 'id', None)}: {e}")
+
+def set_round_special_measure(round_obj: Round, measure: str, note: str = None):
+    """Apply and record a special measure on a round."""
+    try:
+        round_obj.special_measure = measure
+        round_obj.special_note = note
+        db.session.add(round_obj)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Failed to set special measure for round_id={getattr(round_obj, 'id', None)}: {e}")
+
 # Admin authentication
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')  # Change this!
 
@@ -2708,3 +2747,7 @@ def admin_statistics_page():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+# --- Public pages ---
+@app.route('/rules')
+def rules():
+    return render_template('rules.html')
