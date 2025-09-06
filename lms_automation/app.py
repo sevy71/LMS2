@@ -75,6 +75,20 @@ def set_round_special_measure(round_obj: Round, measure: str, note: str = None):
         db.session.rollback()
         app.logger.error(f"Failed to set special measure for round_id={getattr(round_obj, 'id', None)}: {e}")
 
+# --- Optional auto-migration on startup (useful for Railway/Heroku) ---
+def _auto_run_migrations_if_enabled():
+    flag = os.environ.get('AUTO_MIGRATE', 'true').lower()
+    if flag in ('1', 'true', 'yes', 'on'):
+        try:
+            from flask_migrate import upgrade as _upgrade
+            with app.app_context():
+                _upgrade()
+                app.logger.info('Auto-migration completed (alembic upgrade head).')
+        except Exception as e:
+            app.logger.warning(f'Auto-migration failed or skipped: {e}')
+
+_auto_run_migrations_if_enabled()
+
 # Admin authentication
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')  # Change this!
 
