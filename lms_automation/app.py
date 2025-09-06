@@ -75,6 +75,25 @@ def set_round_special_measure(round_obj: Round, measure: str, note: str = None):
         db.session.rollback()
         app.logger.error(f"Failed to set special measure for round_id={getattr(round_obj, 'id', None)}: {e}")
 
+# --- Winner detection ---
+def auto_detect_and_mark_winner():
+    """If exactly one active player remains, mark them as winner.
+    Does nothing if zero or multiple active players remain, or if a winner is already marked.
+    Returns the winner Player object if one was marked, else None.
+    """
+    try:
+        active_players = Player.query.filter_by(status='active').all()
+        if len(active_players) == 1:
+            winner = active_players[0]
+            if (winner.status or '').lower() != 'winner':
+                winner.status = 'winner'
+                db.session.add(winner)
+            return winner
+        return None
+    except Exception as e:
+        app.logger.warning(f"Winner auto-detection failed: {e}")
+        return None
+
 # --- Optional auto-migration on startup (useful for Railway/Heroku) ---
 def _auto_run_migrations_if_enabled():
     flag = os.environ.get('AUTO_MIGRATE', 'true').lower()
@@ -970,6 +989,9 @@ def handle_round_by_id(round_id):
             
             old_status = round_obj.status
             round_obj.status = new_status
+            # If admin marks a round as completed, also attempt winner detection
+            if new_status == 'completed':
+                auto_detect_and_mark_winner()
             db.session.commit()
             
             return jsonify({
@@ -1933,6 +1955,8 @@ def process_round_results(round_id):
         
         if completed_fixtures == total_fixtures:
             round_obj.status = 'completed'
+            # If round fully completed, check if there is a single remaining active player and mark winner
+            auto_detect_and_mark_winner()
         
         db.session.commit()
         
