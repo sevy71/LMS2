@@ -68,10 +68,6 @@
                         <input class="form-check-input" type="checkbox" id="activeOnly">
                         <label class="form-check-label" for="activeOnly">Active players only</label>
                     </div>
-                    <div class="btn-group">
-                        <button type="button" class="btn btn-outline-secondary btn-sm" id="exportRound">⬇️ Export Round CSV</button>
-                        <button type="button" class="btn btn-outline-secondary btn-sm" id="exportRoundExcel">⬇️ Export Round Excel</button>
-                    </div>
                 </div>
             </div>
 
@@ -979,24 +975,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 window.location.href = '/api/export/picks-grid-xlsx';
             });
         }
-        const exportRoundBtn = document.getElementById('exportRound');
-        if (exportRoundBtn) {
-            exportRoundBtn.addEventListener('click', function() {
-                const roundSelect = document.getElementById('roundSelect');
-                const r = roundSelect && roundSelect.value ? roundSelect.value : '';
-                const qs = r ? `?round=${encodeURIComponent(r)}` : '';
-                window.location.href = `/api/export/round-picks${qs}`;
-            });
-        }
-        const exportRoundExcelBtn = document.getElementById('exportRoundExcel');
-        if (exportRoundExcelBtn) {
-            exportRoundExcelBtn.addEventListener('click', function() {
-                const roundSelect = document.getElementById('roundSelect');
-                const r = roundSelect && roundSelect.value ? roundSelect.value : '';
-                const qs = r ? `?round=${encodeURIComponent(r)}` : '';
-                window.location.href = `/api/export/round-picks-xlsx${qs}`;
-            });
-        }
+        // Round export buttons removed to declutter the page
     }
 
     function updateSortButtons(activeButton) {
