@@ -89,6 +89,69 @@ def _auto_run_migrations_if_enabled():
 
 _auto_run_migrations_if_enabled()
 
+# --- Fallback: Ensure required columns exist (for environments where migrations didn't run) ---
+from sqlalchemy import inspect, text
+
+def _ensure_minimum_schema():
+    try:
+        with app.app_context():
+            engine = db.engine
+            insp = inspect(engine)
+
+            # Rounds table columns
+            if insp.has_table('rounds'):
+                round_cols = {col['name'] for col in insp.get_columns('rounds')}
+                # (name, SQL type clause)
+                rounds_missing = []
+                if 'first_kickoff_at' not in round_cols:
+                    rounds_missing.append((
+                        'first_kickoff_at', 'TIMESTAMP NULL'
+                    ))
+                if 'special_measure' not in round_cols:
+                    rounds_missing.append((
+                        'special_measure', 'VARCHAR(50) NULL'
+                    ))
+                if 'special_note' not in round_cols:
+                    rounds_missing.append((
+                        'special_note', 'TEXT NULL'
+                    ))
+                if 'cycle_number' not in round_cols:
+                    rounds_missing.append((
+                        'cycle_number', 'INTEGER NULL'
+                    ))
+                for name, type_sql in rounds_missing:
+                    try:
+                        db.session.execute(text(f'ALTER TABLE rounds ADD COLUMN {name} {type_sql};'))
+                        app.logger.info(f'Added missing column rounds.{name}')
+                    except Exception as e:
+                        app.logger.warning(f'Could not add rounds.{name}: {e}')
+
+            # Picks table columns
+            if insp.has_table('picks'):
+                pick_cols = {col['name'] for col in insp.get_columns('picks')}
+                picks_missing = []
+                if 'auto_assigned' not in pick_cols:
+                    picks_missing.append(('auto_assigned', 'BOOLEAN NULL'))
+                if 'auto_reason' not in pick_cols:
+                    picks_missing.append(('auto_reason', 'VARCHAR(50) NULL'))
+                if 'postponed_event_id' not in pick_cols:
+                    picks_missing.append(('postponed_event_id', 'VARCHAR(50) NULL'))
+                if 'announcement_time' not in pick_cols:
+                    picks_missing.append(('announcement_time', 'TIMESTAMP NULL'))
+                for name, type_sql in picks_missing:
+                    try:
+                        db.session.execute(text(f'ALTER TABLE picks ADD COLUMN {name} {type_sql};'))
+                        app.logger.info(f'Added missing column picks.{name}')
+                    except Exception as e:
+                        app.logger.warning(f'Could not add picks.{name}: {e}')
+
+            db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        app.logger.warning(f'Schema ensure fallback encountered an error: {e}')
+
+_ensure_minimum_schema()
+
 # Admin authentication
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')  # Change this!
 
