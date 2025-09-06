@@ -21,13 +21,20 @@
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container">
-            <a class="navbar-brand" href="{{ url_for('index') }}">Last Man Standing</a>
-            <div class="navbar-nav ms-auto">
-                <a class="nav-link" href="{{ url_for('index') }}">Home</a>
-                <a class="nav-link" href="{{ url_for('player_registration') }}">Join Game</a>
-                <a class="nav-link" href="{{ url_for('rules') }}">Rules</a>
-                <a class="nav-link" href="{{ url_for('admin_dashboard') }}">Admin</a>
-            </div>
+            {% if player_nav_only %}
+                <span class="navbar-brand">Last Man Standing</span>
+                <div class="navbar-nav ms-auto">
+                    <a class="nav-link" href="{{ url_for('rules') }}">Rules</a>
+                </div>
+            {% else %}
+                <a class="navbar-brand" href="{{ url_for('index') }}">Last Man Standing</a>
+                <div class="navbar-nav ms-auto">
+                    <a class="nav-link" href="{{ url_for('index') }}">Home</a>
+                    <a class="nav-link" href="{{ url_for('player_registration') }}">Join Game</a>
+                    <a class="nav-link" href="{{ url_for('rules') }}">Rules</a>
+                    <a class="nav-link" href="{{ url_for('admin_dashboard') }}">Admin</a>
+                </div>
+            {% endif %}
         </div>
     </nav>
 

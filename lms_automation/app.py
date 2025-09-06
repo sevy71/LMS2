@@ -2208,11 +2208,11 @@ def make_pick(token):
     pick_token = PickToken.query.filter_by(token=token).first()
     
     if not pick_token:
-        return render_template('pick_error.html', error="Invalid pick link"), 404
+        return render_template('pick_error.html', error="Invalid pick link", player_nav_only=True), 404
     
     if not pick_token.is_valid():
         error = "This pick link has expired" if pick_token.expires_at and datetime.utcnow() > pick_token.expires_at else "This pick link has already been used"
-        return render_template('pick_error.html', error=error), 400
+        return render_template('pick_error.html', error=error, player_nav_only=True), 400
     
     player = pick_token.player
     round_obj = pick_token.round
@@ -2231,7 +2231,8 @@ def make_pick(token):
                              already_picked=True,
                              can_edit=False,
                              edits_remaining=0,
-                             token=token)
+                             token=token,
+                             player_nav_only=True)
     
     # Get fixtures for this round
     fixtures = Fixture.query.filter_by(round_id=round_obj.id).all()
@@ -2287,7 +2288,8 @@ def make_pick(token):
                                  fixtures=fixtures, 
                                  used_teams=used_teams,
                                  is_team_used=is_team_used,
-                                 error="Please select a team")
+                                 error="Please select a team",
+                                 player_nav_only=True)
         
         if is_team_used(team_picked):
             return render_template('pick_form.html', 
@@ -2296,7 +2298,8 @@ def make_pick(token):
                                  fixtures=fixtures, 
                                  used_teams=used_teams,
                                  is_team_used=is_team_used,
-                                 error="You have already picked this team in a previous round")
+                                 error="You have already picked this team in a previous round",
+                                 player_nav_only=True)
         
         # Validate team exists in fixtures
         valid_teams = []
@@ -2310,7 +2313,8 @@ def make_pick(token):
                                  fixtures=fixtures, 
                                  used_teams=used_teams,
                                  is_team_used=is_team_used,
-                                 error="Invalid team selection")
+                                 error="Invalid team selection",
+                                 player_nav_only=True)
         
         # Create or update the pick
         if existing_pick:
@@ -2338,7 +2342,8 @@ def make_pick(token):
                              already_picked=not is_new_pick,
                              can_edit=pick_token.edit_count < 2,
                              edits_remaining=2 - pick_token.edit_count,
-                             token=token)
+                             token=token,
+                             player_nav_only=True)
     
     # GET request - show the pick form
     return render_template('pick_form.html', 
@@ -2350,7 +2355,8 @@ def make_pick(token):
                          can_edit=can_edit,
                          edits_remaining=edits_remaining,
                          token=token,
-                         is_team_used=is_team_used)
+                         is_team_used=is_team_used,
+                         player_nav_only=True)
 
 @app.route('/register')
 def player_registration():
@@ -2473,7 +2479,7 @@ def player_dashboard(token):
     pick_token = PickToken.query.filter_by(token=token).first()
     
     if not pick_token:
-        return render_template('pick_error.html', error="Invalid dashboard link"), 404
+        return render_template('pick_error.html', error="Invalid dashboard link", player_nav_only=True), 404
     
     player = pick_token.player
     current_round = Round.query.filter_by(status='active').first()
@@ -2481,7 +2487,8 @@ def player_dashboard(token):
     return render_template('player_dashboard.html', 
                          player=player, 
                          current_round=current_round,
-                         token=token)
+                         token=token,
+                         player_nav_only=True)
 
 @app.route('/api/player/<token>/league-table')
 def get_player_league_table(token):
