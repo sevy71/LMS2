@@ -502,7 +502,8 @@ def send_picks():
         
         # Only generate WhatsApp link if player has a WhatsApp number
         if player.whatsapp_number:
-            player.whatsapp_link = f"https://web.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={encoded_message}"
+            # Use api.whatsapp.com for cross-platform (mobile opens app; desktop opens WhatsApp Web)
+            player.whatsapp_link = f"https://api.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={encoded_message}"
             # Debug logging
             print(f"WhatsApp link for {player.name}: {player.whatsapp_link[:100]}...")
         else:
@@ -2670,7 +2671,8 @@ Last Man Standing"""
         # Generate WhatsApp web link
         encoded_message = message.replace('\n', '%0A').replace(' ', '%20')
         clean_number = player.whatsapp_number.replace('+', '')
-        whatsapp_link = f"https://web.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
+        # Use api.whatsapp.com to work on both mobile and desktop
+        whatsapp_link = f"https://api.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
         
         return {
             'player_name': player.name,
