@@ -28,7 +28,9 @@
                                             <small class="text-muted">{{ player.whatsapp_number or 'No number' }}</small>
                                         </div>
                                         {% if player.whatsapp_link %}
-                                            <a href="{{ player.whatsapp_link }}" class="btn btn-sm btn-success" target="_blank">
+                                            <a href="#" class="btn btn-sm btn-success wa-send" target="_blank"
+                                               data-wa-mobile="{{ player.wa_link_mobile }}"
+                                               data-wa-desktop="{{ player.wa_link_desktop }}">
                                                 <i class="fab fa-whatsapp me-1"></i>Send
                                             </a>
                                         {% else %}
@@ -58,7 +60,9 @@
                                             <td>{{ player.whatsapp_number or '<em>No number</em>' }}</td>
                                             <td>
                                                 {% if player.whatsapp_link %}
-                                                    <a href="{{ player.whatsapp_link }}" class="btn btn-sm btn-success" target="_blank">
+                                                    <a href="#" class="btn btn-sm btn-success wa-send" target="_blank"
+                                                       data-wa-mobile="{{ player.wa_link_mobile }}"
+                                                       data-wa-desktop="{{ player.wa_link_desktop }}">
                                                         <i class="fab fa-whatsapp me-1"></i>Send via WhatsApp
                                                     </a>
                                                 {% else %}
@@ -78,4 +82,16 @@
         </div>
     </div>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(navigator.userAgent);
+    document.querySelectorAll('a.wa-send').forEach(a => {
+      const mobile = a.getAttribute('data-wa-mobile');
+      const desktop = a.getAttribute('data-wa-desktop');
+      a.href = isMobile ? mobile : desktop;
+    });
+  });
+  </script>
 {% endblock %}

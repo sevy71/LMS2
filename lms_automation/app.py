@@ -502,10 +502,14 @@ def send_picks():
         
         # Only generate WhatsApp link if player has a WhatsApp number
         if player.whatsapp_number:
-            # Use api.whatsapp.com for cross-platform (mobile opens app; desktop opens WhatsApp Web)
-            player.whatsapp_link = f"https://api.whatsapp.com/send?phone={player.whatsapp_number.replace('+', '')}&text={encoded_message}"
+            clean_number = player.whatsapp_number.replace('+', '')
+            # Prepare both mobile and desktop links; we will choose client-side
+            player.wa_link_mobile = f"https://api.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
+            player.wa_link_desktop = f"https://web.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
+            # Backwards-compatible default (will be overridden client-side)
+            player.whatsapp_link = player.wa_link_mobile
             # Debug logging
-            print(f"WhatsApp link for {player.name}: {player.whatsapp_link[:100]}...")
+            print(f"WhatsApp links for {player.name}: mobile={player.wa_link_mobile[:80]}..., desktop={player.wa_link_desktop[:80]}...")
         else:
             player.whatsapp_link = None
             print(f"No WhatsApp number for {player.name}, link generation skipped")
