@@ -104,25 +104,40 @@ class PickToken(db.Model):
         return ''.join(secrets.choice(alphabet) for _ in range(32))
     
     @staticmethod
-    def create_for_player_round(player_id, round_id, expires_hours=168):  # 7 days default
-        """Create a new pick token for a player and round"""
-        # Check if token already exists and hasn't exceeded edit limit
-        existing_token = PickToken.query.filter_by(
-            player_id=player_id, 
-            round_id=round_id
-        ).filter(PickToken.edit_count < 2).first()
-        
-        if existing_token:
-            return existing_token
-        
+    def create_for_player_round(player_id, round_id, expires_hours=168, force_new=False):  # default kept for fallback when no deadline
+        """Create or fetch a pick token for a player and round.
+        - Reuse existing token only if it's still valid and not forced to regenerate.
+        - Prefer setting expiry to the round deadline (end_date) when available.
+        """
+        # Try to reuse an existing valid token unless forced
+        if not force_new:
+            existing_token = PickToken.query.filter_by(
+                player_id=player_id,
+                round_id=round_id
+            ).first()
+            if existing_token and existing_token.is_valid():
+                return existing_token
+
+        # Determine expiry from round deadline when present
+        round_obj = Round.query.get(round_id)
+        expires_at = None
+        if round_obj and round_obj.end_date:
+            # Use the round deadline; if it's in the past, fall back to expires_hours window
+            if round_obj.end_date > datetime.utcnow():
+                expires_at = round_obj.end_date
+            elif expires_hours:
+                expires_at = datetime.utcnow() + timedelta(hours=expires_hours)
+        elif expires_hours:
+            expires_at = datetime.utcnow() + timedelta(hours=expires_hours)
+
         # Create new token
         token = PickToken(
             player_id=player_id,
             round_id=round_id,
             token=PickToken.generate_token(),
-            expires_at=datetime.utcnow() + timedelta(hours=expires_hours) if expires_hours else None
+            expires_at=expires_at
         )
-        
+
         db.session.add(token)
         return token
     

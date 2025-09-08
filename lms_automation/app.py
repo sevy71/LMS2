@@ -446,6 +446,7 @@ def send_picks():
     active_players = Player.query.filter_by(status='active').all()
     
     for player in active_players:
+        # Generate or refresh token; it will auto-expire at the round deadline if set
         pick_token = PickToken.create_for_player_round(player.id, current_round.id)
         db.session.commit() # Commit to get the token
         # Get base URL - prioritize Railway deployment URL
@@ -469,6 +470,7 @@ def send_picks():
         registration_url = f"{base_url}/register"
         
         # Format message with better mobile WhatsApp compatibility
+        deadline_str = current_round.end_date.strftime('%a %d %b %Y, %H:%M') if current_round.end_date else None
         message_lines = [
             f"🏆 Last Man Standing - Round {current_round.round_number}",
             "",
@@ -480,7 +482,7 @@ def send_picks():
             "• Pick a team you think will WIN",
             "• You can only use each team ONCE", 
             "• If your team loses or draws, you're out!",
-            "• Link expires in 7 days",
+            (f"• Link valid until: {deadline_str}" if deadline_str else "• Link valid until the round deadline"),
             "",
             "Good luck! 🍀",
             "",
