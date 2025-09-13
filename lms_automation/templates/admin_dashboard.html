@@ -65,6 +65,9 @@
                             You can now reset the game to start a new cycle.
                         </div>
                     {% endif %}
+
+                    <!-- Picks submission status -->
+                    <div id="picksStatus" class="mt-3"></div>
                 {% else %}
                     <div class="text-center py-4">
                         <i class="fas fa-exclamation-triangle text-warning fa-3x mb-3"></i>
@@ -159,7 +162,7 @@
             <div class="card-body text-center p-4">
                 <i class="fas fa-bell text-danger fa-2x mb-3"></i>
                 <h5 class="card-title">Reminders</h5>
-                <p class="card-text text-muted small">Manage automatic pick reminders (4hr & 1hr before deadline)</p>
+                <p class="card-text text-muted small">Manage automatic pick reminders (4hr & 2hr before first kickoff)</p>
                 <a href="{{ url_for('reminders_dashboard') }}" class="btn btn-danger btn-lg w-100">
                     <i class="fas fa-bell me-2"></i>Manage Reminders
                 </a>
@@ -230,6 +233,61 @@
         </button>
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Only attempt fetch if the picksStatus container exists
+  const container = document.getElementById('picksStatus');
+  if (!container) return;
+
+  async function loadPicksStatus() {
+    try {
+      const resp = await fetch('/api/admin/current-round-picks-status');
+      const data = await resp.json();
+      if (!data.success) return;
+
+      if (!data.round) {
+        container.innerHTML = '';
+        return;
+      }
+
+      const active = data.counts.active_players;
+      const submitted = data.counts.picks_submitted;
+      const allIn = data.all_in;
+      const missing = data.missing || [];
+      const link = data.admin_whatsapp_link;
+
+      if (allIn) {
+        container.innerHTML = `
+          <div class="alert alert-success d-flex justify-content-between align-items-center">
+            <div>
+              <strong>✅ All picks are in!</strong> (${submitted}/${active})
+            </div>
+            ${link ? `<a class="btn btn-sm btn-success" href="${link}" target="_blank">
+                <i class="fab fa-whatsapp me-1"></i> Notify Me
+              </a>` : ''}
+          </div>
+        `;
+      } else {
+        const missingList = missing.slice(0, 4).join(', ');
+        const more = missing.length > 4 ? ` and ${missing.length - 4} more` : '';
+        container.innerHTML = `
+          <div class="alert alert-info">
+            <div class="fw-bold mb-1">Picks received: ${submitted}/${active}</div>
+            ${missing.length ? `<small class="text-muted">Missing: ${missingList}${more}</small>` : ''}
+          </div>
+        `;
+      }
+    } catch (e) {
+      // Silently ignore rendering errors
+    }
+  }
+
+  loadPicksStatus();
+  // Refresh periodically while admin has the page open
+  setInterval(loadPicksStatus, 30000);
+});
+</script>
 
 <div class="collapse" id="utilityActions">
     <div class="row mb-5">

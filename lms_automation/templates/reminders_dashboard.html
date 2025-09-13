@@ -92,7 +92,7 @@
     border-left-color: #17a2b8;
 }
 
-.reminder-1_hour {
+.reminder-2_hour {
     border-left-color: #dc3545;
 }
 
@@ -178,7 +178,7 @@ function renderDueReminders(reminders) {
                         </div>
                         <div class="text-end">
                             <span class="badge bg-${reminder.reminder_type === '4_hour' ? 'info' : 'danger'}">
-                                ${reminder.reminder_type === '4_hour' ? '4 Hour' : '1 Hour'} Reminder
+                                ${reminder.reminder_type === '4_hour' ? '4 Hour' : '2 Hour'} Reminder
                             </span>
                             ${isOverdue ? '<br><small class="text-danger">OVERDUE</small>' : ''}
                         </div>

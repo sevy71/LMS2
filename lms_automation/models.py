@@ -173,7 +173,7 @@ class ReminderSchedule(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     player_id = db.Column(db.Integer, db.ForeignKey('players.id'), nullable=False)
     round_id = db.Column(db.Integer, db.ForeignKey('rounds.id'), nullable=False)
-    reminder_type = db.Column(db.String(20), nullable=False)  # '4_hour' or '1_hour'
+    reminder_type = db.Column(db.String(20), nullable=False)  # '4_hour' or '2_hour'
     scheduled_time = db.Column(db.DateTime, nullable=False)
     sent_at = db.Column(db.DateTime, nullable=True)
     is_sent = db.Column(db.Boolean, default=False)
@@ -188,16 +188,37 @@ class ReminderSchedule(db.Model):
     
     @staticmethod
     def create_reminders_for_round(round_id):
-        """Create reminder schedules for all active players in a round"""
+        """Create reminder schedules for all active players in a round.
+        Anchors reminders to first_kickoff_at when available, otherwise end_date.
+        Generates 4-hour and 2-hour reminders before the anchor time.
+        """
         round_obj = Round.query.get(round_id)
-        if not round_obj or not round_obj.end_date:
+        if not round_obj:
+            return False
+
+        # Determine anchor time (prefer first_kickoff_at; fallback to end_date)
+        anchor_time = round_obj.first_kickoff_at or round_obj.end_date
+        if not anchor_time:
+            # Try derive from fixtures
+            try:
+                fixtures = round_obj.fixtures or []
+                earliest = None
+                for fx in fixtures:
+                    if getattr(fx, 'date', None) and getattr(fx, 'time', None):
+                        dt = datetime.combine(fx.date, fx.time)
+                        if earliest is None or dt < earliest:
+                            earliest = dt
+                anchor_time = earliest
+            except Exception:
+                anchor_time = None
+        if not anchor_time:
             return False
         
         active_players = Player.query.filter_by(status='active').all()
         
-        # Calculate reminder times
-        four_hour_reminder = round_obj.end_date - timedelta(hours=4)
-        one_hour_reminder = round_obj.end_date - timedelta(hours=1)
+        # Calculate reminder times relative to anchor
+        four_hour_reminder = anchor_time - timedelta(hours=4)
+        two_hour_reminder = anchor_time - timedelta(hours=2)
         
         reminders_created = 0
         
@@ -209,10 +230,10 @@ class ReminderSchedule(db.Model):
                 reminder_type='4_hour'
             ).first()
             
-            existing_1h = ReminderSchedule.query.filter_by(
+            existing_2h = ReminderSchedule.query.filter_by(
                 player_id=player.id, 
                 round_id=round_id, 
-                reminder_type='1_hour'
+                reminder_type='2_hour'
             ).first()
             
             # Create 4-hour reminder
@@ -226,15 +247,15 @@ class ReminderSchedule(db.Model):
                 db.session.add(reminder_4h)
                 reminders_created += 1
             
-            # Create 1-hour reminder
-            if not existing_1h and one_hour_reminder > datetime.utcnow():
-                reminder_1h = ReminderSchedule(
+            # Create 2-hour reminder
+            if not existing_2h and two_hour_reminder > datetime.utcnow():
+                reminder_2h = ReminderSchedule(
                     player_id=player.id,
                     round_id=round_id,
-                    reminder_type='1_hour',
-                    scheduled_time=one_hour_reminder
+                    reminder_type='2_hour',
+                    scheduled_time=two_hour_reminder
                 )
-                db.session.add(reminder_1h)
+                db.session.add(reminder_2h)
                 reminders_created += 1
         
         db.session.commit()

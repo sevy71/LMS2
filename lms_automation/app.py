@@ -173,6 +173,7 @@ _ensure_minimum_schema()
 
 # Admin authentication
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')  # Change this!
+ADMIN_WHATSAPP = os.environ.get('ADMIN_WHATSAPP')  # Optional: admin WhatsApp number (e.g., +441234567890)
 
 # --- Helpers ---
 def team_abbrev(team_name: str) -> str:
@@ -436,6 +437,76 @@ def admin_dashboard():
     players = Player.query.all()
     current_round = Round.query.filter_by(status='active').first()
     return render_template('admin_dashboard.html', players=players, current_round=current_round)
+
+@app.route('/api/admin/current-round-picks-status')
+@admin_required
+def current_round_picks_status():
+    """Return pick submission status for the active round: counts, who’s missing, and an optional WhatsApp link for admin when complete."""
+    try:
+        round_obj = Round.query.filter_by(status='active').first()
+        if not round_obj:
+            return jsonify({
+                'success': True,
+                'round': None,
+                'counts': {'active_players': 0, 'picks_submitted': 0},
+                'all_in': False,
+                'missing': [],
+                'admin_whatsapp_link': None
+            })
+
+        active_players = Player.query.filter_by(status='active').all()
+        active_ids = [p.id for p in active_players]
+
+        if not active_ids:
+            return jsonify({
+                'success': True,
+                'round': {'id': round_obj.id, 'round_number': round_obj.round_number},
+                'counts': {'active_players': 0, 'picks_submitted': 0},
+                'all_in': False,
+                'missing': [],
+                'admin_whatsapp_link': None
+            })
+
+        picks = Pick.query.filter(Pick.round_id == round_obj.id, Pick.player_id.in_(active_ids)).all()
+        picked_ids = {p.player_id for p in picks}
+        missing_players = [p.name for p in active_players if p.id not in picked_ids]
+
+        all_in = (len(picked_ids) == len(active_ids)) and len(active_ids) > 0
+
+        # Optional WhatsApp link to notify admin when all picks are in
+        whatsapp_link = None
+        if all_in and ADMIN_WHATSAPP:
+            base_url = os.environ.get('BASE_URL', request.url_root.rstrip('/'))
+            if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
+                base_url = base_url.replace('http://', 'https://')
+            if not base_url.startswith(('http://', 'https://')):
+                base_url = f"https://{base_url}"
+
+            message_lines = [
+                f"✅ All picks are in!",
+                f"Round {round_obj.round_number} (PL MD {round_obj.pl_matchday})",
+                "",
+                "You can proceed with locking the round or reviewing picks.",
+                base_url
+            ]
+            msg = "\n".join(message_lines)
+            encoded = msg.replace('\n', '%0A')
+            clean = ADMIN_WHATSAPP.replace('+', '')
+            whatsapp_link = f"https://api.whatsapp.com/send?phone={clean}&text={encoded}"
+
+        return jsonify({
+            'success': True,
+            'round': {'id': round_obj.id, 'round_number': round_obj.round_number},
+            'counts': {
+                'active_players': len(active_ids),
+                'picks_submitted': len(picked_ids)
+            },
+            'all_in': all_in,
+            'missing': missing_players,
+            'admin_whatsapp_link': whatsapp_link
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/send_picks')
 def send_picks():
@@ -741,6 +812,7 @@ def handle_rounds():
                 
                 if formatted_fixtures:
                     # Create fixture records from API data
+                    earliest_kickoff = None
                     for fixture_data in formatted_fixtures:
                         fixture = Fixture(
                             round_id=new_round.id,
@@ -754,6 +826,16 @@ def handle_rounds():
                             status=fixture_data['status']
                         )
                         db.session.add(fixture)
+                        # Track earliest kickoff if date and time present
+                        try:
+                            if fixture_data['date'] and fixture_data['time']:
+                                dt = datetime.combine(fixture_data['date'], fixture_data['time'])
+                                if (earliest_kickoff is None) or (dt < earliest_kickoff):
+                                    earliest_kickoff = dt
+                        except Exception:
+                            pass
+                    if earliest_kickoff:
+                        new_round.first_kickoff_at = earliest_kickoff
                     
                     db.session.commit()
                     
@@ -1070,6 +1152,7 @@ def add_fixtures_to_round(round_id):
             
             if formatted_fixtures:
                 # Create fixture records from API data
+                earliest_kickoff = None
                 for fixture_data in formatted_fixtures:
                     fixture = Fixture(
                         round_id=round_obj.id,
@@ -1083,6 +1166,15 @@ def add_fixtures_to_round(round_id):
                         status=fixture_data['status']
                     )
                     db.session.add(fixture)
+                    try:
+                        if fixture_data['date'] and fixture_data['time']:
+                            dt = datetime.combine(fixture_data['date'], fixture_data['time'])
+                            if (earliest_kickoff is None) or (dt < earliest_kickoff):
+                                earliest_kickoff = dt
+                    except Exception:
+                        pass
+                if earliest_kickoff:
+                    round_obj.first_kickoff_at = earliest_kickoff
                 
                 db.session.commit()
                 
@@ -2650,9 +2742,9 @@ class WhatsAppReminder:
         if reminder_type == '4_hour':
             urgency = "⏰ 4 hours left!"
             time_msg = "You have 4 hours remaining"
-        elif reminder_type == '1_hour':
-            urgency = "🚨 URGENT - 1 hour left!"
-            time_msg = "Only 1 hour remaining"
+        elif reminder_type == '2_hour':
+            urgency = "⏰ 2 hours left!"
+            time_msg = "Only 2 hours remaining"
         else:
             urgency = "📝 Reminder"
             time_msg = "Don't forget"
