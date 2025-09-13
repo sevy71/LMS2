@@ -286,6 +286,42 @@ document.addEventListener('DOMContentLoaded', function() {
   loadPicksStatus();
   // Refresh periodically while admin has the page open
   setInterval(loadPicksStatus, 30000);
+
+  // Apply auto-picks for missed players (manual, admin-triggered)
+  const applyBtn = document.getElementById('applyAutoPicksBtn');
+  if (applyBtn) {
+    applyBtn.addEventListener('click', async () => {
+      if (!confirm('Apply auto-picks for players who missed the submission cutoff?')) return;
+      try {
+        const resRounds = await fetch('/api/rounds');
+        const rounds = await resRounds.json();
+        const active = (rounds || []).find(r => r.status === 'active');
+        if (!active) { alert('No active round found.'); return; }
+
+        const resp = await fetch(`/api/admin/rounds/${active.id}/apply-missed-picks`, { method: 'POST' });
+        const data = await resp.json();
+        if (!data.success) { alert(data.error || 'Failed to apply auto-picks'); return; }
+
+        const applied = data.applied || [];
+        const skipped = data.skipped || [];
+        let msg = `Applied ${applied.length} auto-picks for Round ${data.round_number}.`;
+        if (applied.length) {
+          msg += `\n\nAuto-picked:`;
+          msg += applied.slice(0, 10).map(a => `\n• ${a.player}: ${a.team}`).join('');
+          if (applied.length > 10) msg += `\n… and ${applied.length - 10} more`;
+        }
+        if (skipped.length) {
+          const already = skipped.filter(s => s.reason === 'already_picked').length;
+          const noElig = skipped.filter(s => s.reason === 'no_eligible_team').length;
+          msg += `\n\nSkipped: ${skipped.length} (already picked: ${already}, no eligible team: ${noElig})`;
+        }
+        alert(msg);
+        loadPicksStatus();
+      } catch (e) {
+        alert('Error applying auto-picks');
+      }
+    });
+  }
 });
 </script>
 
@@ -294,6 +330,11 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="col-lg-4 col-md-6 mb-3">
             <button class="btn btn-outline-success w-100 py-2" id="generateGeneralLinkBtn">
                 <i class="fas fa-link me-2"></i>General Registration Link
+            </button>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-3">
+            <button class="btn btn-outline-dark w-100 py-2" id="applyAutoPicksBtn">
+                <i class="fas fa-magic me-2"></i>Apply Auto-Picks (Missed Deadline)
             </button>
         </div>
         <div class="col-lg-4 col-md-6 mb-3">

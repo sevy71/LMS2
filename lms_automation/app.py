@@ -508,6 +508,130 @@ def current_round_picks_status():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+def _earliest_kickoff_for_round(round_obj: Round):
+    """Helper: determine earliest kickoff datetime for a round from fixtures."""
+    try:
+        earliest = None
+        for fx in round_obj.fixtures or []:
+            if getattr(fx, 'date', None) and getattr(fx, 'time', None):
+                dt = datetime.combine(fx.date, fx.time)
+                if earliest is None or dt < earliest:
+                    earliest = dt
+        return earliest
+    except Exception:
+        return None
+
+def _eligible_teams_for_round(round_obj: Round):
+    """Return the set of team names playing in this round."""
+    teams = set()
+    for fx in round_obj.fixtures or []:
+        if fx.home_team:
+            teams.add(fx.home_team)
+        if fx.away_team:
+            teams.add(fx.away_team)
+    return teams
+
+def _teams_used_this_cycle(player_id: int, cycle_number: int):
+    """Return a set of team names the player has used in the current cycle."""
+    picks = Pick.query.filter_by(player_id=player_id).join(Round).filter(Round.cycle_number == cycle_number).all()
+    return {p.team_picked for p in picks}
+
+def _opposing_team_from_past_pick(pick: Pick) -> str:
+    """Find the opposing team for a given past pick, using that pick's round fixtures."""
+    try:
+        r = pick.round
+        fixtures = r.fixtures or []
+        for fx in fixtures:
+            if fx.home_team == pick.team_picked:
+                return fx.away_team
+            if fx.away_team == pick.team_picked:
+                return fx.home_team
+        return None
+    except Exception:
+        return None
+
+@app.route('/api/admin/rounds/<int:round_id>/apply-missed-picks', methods=['POST'])
+@admin_required
+def apply_missed_picks(round_id):
+    """Admin-triggered: After cutoff (1h before first kickoff), auto-pick for active players without a pick.
+
+    Logic:
+    - Determine cutoff = (first_kickoff_at or derived earliest kickoff) - 1 hour.
+    - For each active player with no pick in this round:
+        1) Walk their past picks from most recent to oldest; when a past pick is a WIN, take the opposing (losing) team
+           from that match if it's playing this round and not yet used this cycle.
+        2) Otherwise, pick the first eligible team (alphabetically) that they haven't used this cycle.
+    - Mark pick.auto_assigned = True, pick.auto_reason = 'missed_deadline'.
+    """
+    try:
+        round_obj = Round.query.get_or_404(round_id)
+
+        # Compute cutoff time
+        anchor = round_obj.first_kickoff_at or _earliest_kickoff_for_round(round_obj) or round_obj.end_date
+        if not anchor:
+            return jsonify({'success': False, 'error': 'Cannot determine first kickoff or deadline for this round'}), 400
+        cutoff = anchor - timedelta(hours=1)
+        if datetime.utcnow() < cutoff:
+            return jsonify({'success': False, 'error': 'Cutoff not reached yet. Try after the submission deadline.'}), 400
+
+        # Build sets
+        eligible_teams = _eligible_teams_for_round(round_obj)
+        active_players = Player.query.filter_by(status='active').all()
+        applied = []
+        skipped = []
+
+        for player in active_players:
+            # Skip if player already has a pick for this round
+            existing_pick = Pick.query.filter_by(player_id=player.id, round_id=round_obj.id).first()
+            if existing_pick:
+                skipped.append({'player': player.name, 'reason': 'already_picked'})
+                continue
+
+            used_teams = _teams_used_this_cycle(player.id, round_obj.cycle_number or 1)
+
+            # Strategy 1: past winning picks → opposing team of that match
+            candidate = None
+            past_picks = Pick.query.filter_by(player_id=player.id).join(Round).order_by(Round.round_number.desc()).all()
+            for past in past_picks:
+                if past.is_winner is True:
+                    opp = _opposing_team_from_past_pick(past)
+                    if opp and (opp in eligible_teams) and (opp not in used_teams):
+                        candidate = opp
+                        break
+
+            # Strategy 2: first eligible team alphabetically not yet used this cycle
+            if not candidate:
+                remaining = sorted([t for t in eligible_teams if t not in used_teams])
+                if remaining:
+                    candidate = remaining[0]
+
+            if not candidate:
+                skipped.append({'player': player.name, 'reason': 'no_eligible_team'})
+                continue
+
+            # Create auto pick
+            pick = Pick(player_id=player.id, round_id=round_obj.id, team_picked=candidate)
+            db.session.add(pick)
+            db.session.flush()
+            # Audit
+            log_auto_pick(pick, reason='missed_deadline')
+
+            applied.append({'player': player.name, 'team': candidate})
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'round_id': round_obj.id,
+            'round_number': round_obj.round_number,
+            'applied_count': len(applied),
+            'applied': applied,
+            'skipped': skipped
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/send_picks')
 def send_picks():
     current_round = Round.query.filter_by(status='active').first()
