@@ -31,23 +31,36 @@
                 </div>
                 <div class="card-body">
                     <div class="row text-center">
-                        <div class="col-md-4">
+                        <div class="col-md-3">
                             <h6>Status</h6>
                             <span class="badge bg-{{ 'success' if current_round.status == 'active' else 'warning' }} fs-6">
                                 {{ current_round.status.title() }}
                             </span>
                         </div>
-                        {% if current_round.end_date %}
-                        <div class="col-md-4">
-                            <h6>Deadline</h6>
-                            <p class="mb-0">{{ current_round.end_date.strftime('%d %b %Y, %H:%M') }}</p>
+                        <div class="col-md-3">
+                            <h6>First Kickoff</h6>
+                            {% if current_round.first_kickoff_at %}
+                                <p class="mb-0">{{ current_round.first_kickoff_at.strftime('%d %b %Y, %H:%M') }}</p>
+                            {% elif current_round.end_date %}
+                                <p class="mb-0">{{ current_round.end_date.strftime('%d %b %Y, %H:%M') }}</p>
+                            {% else %}
+                                <p class="mb-0 text-muted">Unknown</p>
+                            {% endif %}
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-3">
+                            <h6>Cutoff (Pick Deadline)</h6>
+                            {% set anchor = current_round.first_kickoff_at or current_round.end_date %}
+                            {% if anchor %}
+                                <p class="mb-0">{{ (anchor - timedelta(hours=1)).strftime('%d %b %Y, %H:%M') }}</p>
+                            {% else %}
+                                <p class="mb-0 text-muted">Unknown</p>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-3 d-flex align-items-center justify-content-center">
                             <button class="btn btn-success btn-sm" onclick="scheduleReminders({{ current_round.id }})">
                                 <i class="fas fa-plus"></i> Schedule Reminders
                             </button>
                         </div>
-                        {% endif %}
                     </div>
                 </div>
             </div>
