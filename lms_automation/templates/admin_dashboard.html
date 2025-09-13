@@ -322,6 +322,31 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     });
   }
+
+  // Preview auto-picks (dry-run; no changes)
+  const previewBtn = document.getElementById('previewAutoPicksBtn');
+  if (previewBtn) {
+    previewBtn.addEventListener('click', async () => {
+      try {
+        const resRounds = await fetch('/api/rounds');
+        const rounds = await resRounds.json();
+        const active = (rounds || []).find(r => r.status === 'active');
+        if (!active) { alert('No active round found.'); return; }
+
+        const resp = await fetch(`/api/admin/rounds/${active.id}/apply-missed-picks?dry_run=1`, { method: 'POST' });
+        const data = await resp.json();
+        if (!data.success) { alert(data.error || 'Failed to preview auto-picks'); return; }
+
+        const applied = data.applied || [];
+        if (!applied.length) { alert('No auto-picks would be applied.'); return; }
+        let msg = `Preview auto-picks for Round ${data.round_number}:`;
+        msg += applied.map(a => `\n• ${a.player}: ${a.team}`).join('');
+        alert(msg);
+      } catch (e) {
+        alert('Error previewing auto-picks');
+      }
+    });
+  }
 });
 </script>
 
@@ -330,6 +355,11 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="col-lg-4 col-md-6 mb-3">
             <button class="btn btn-outline-success w-100 py-2" id="generateGeneralLinkBtn">
                 <i class="fas fa-link me-2"></i>General Registration Link
+            </button>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-3">
+            <button class="btn btn-outline-primary w-100 py-2" id="previewAutoPicksBtn">
+                <i class="fas fa-eye me-2"></i>Preview Auto-Picks
             </button>
         </div>
         <div class="col-lg-4 col-md-6 mb-3">

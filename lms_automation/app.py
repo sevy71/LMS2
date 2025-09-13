@@ -594,12 +594,15 @@ def apply_missed_picks(round_id):
     try:
         round_obj = Round.query.get_or_404(round_id)
 
+        # Determine dry-run mode (preview only; no DB writes)
+        dry_run = str(request.args.get('dry_run', 'false')).lower() in ('1', 'true', 'yes', 'y')
+
         # Compute cutoff time
         anchor = round_obj.first_kickoff_at or _earliest_kickoff_for_round(round_obj) or round_obj.end_date
         if not anchor:
             return jsonify({'success': False, 'error': 'Cannot determine first kickoff or deadline for this round'}), 400
         cutoff = anchor - timedelta(hours=1)
-        if datetime.utcnow() < cutoff:
+        if (datetime.utcnow() < cutoff) and (not dry_run):
             return jsonify({'success': False, 'error': 'Cutoff not reached yet. Try after the submission deadline.'}), 400
 
         # Build sets
@@ -637,16 +640,18 @@ def apply_missed_picks(round_id):
                 skipped.append({'player': player.name, 'reason': 'no_eligible_team'})
                 continue
 
-            # Create auto pick
-            pick = Pick(player_id=player.id, round_id=round_obj.id, team_picked=candidate)
-            db.session.add(pick)
-            db.session.flush()
-            # Audit
-            log_auto_pick(pick, reason='missed_deadline')
+            if not dry_run:
+                # Create auto pick
+                pick = Pick(player_id=player.id, round_id=round_obj.id, team_picked=candidate)
+                db.session.add(pick)
+                db.session.flush()
+                # Audit
+                log_auto_pick(pick, reason='missed_deadline')
 
             applied.append({'player': player.name, 'team': candidate})
 
-        db.session.commit()
+        if not dry_run:
+            db.session.commit()
 
         return jsonify({
             'success': True,
@@ -654,7 +659,8 @@ def apply_missed_picks(round_id):
             'round_number': round_obj.round_number,
             'applied_count': len(applied),
             'applied': applied,
-            'skipped': skipped
+            'skipped': skipped,
+            'dry_run': dry_run
         })
     except Exception as e:
         db.session.rollback()
