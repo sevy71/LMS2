@@ -2916,6 +2916,14 @@ def get_due_reminders():
     """Get reminders that are due and ready for manual sending"""
     try:
         with app.app_context():
+            # Lazy auto-schedule: ensure reminders exist for the active round
+            try:
+                active_round = Round.query.filter_by(status='active').first()
+                if active_round:
+                    ReminderSchedule.create_reminders_for_round(active_round.id)
+            except Exception as _e:
+                print(f"Auto-schedule skipped/failed: {_e}")
+
             pending_reminders = ReminderSchedule.get_pending_reminders()
             reminder_data = []
             
@@ -3005,7 +3013,17 @@ def mark_reminder_sent(reminder_id):
 def reminders_dashboard():
     """Admin page for managing reminders"""
     current_round = Round.query.filter_by(status='active').first()
-    return render_template('reminders_dashboard.html', current_round=current_round)
+    # Derive first kickoff for display if not stored on the round
+    first_kickoff = None
+    cutoff_time = None
+    try:
+        if current_round:
+            first_kickoff = current_round.first_kickoff_at or _earliest_kickoff_for_round(current_round) or current_round.end_date
+            if first_kickoff:
+                cutoff_time = first_kickoff - timedelta(hours=1)
+    except Exception:
+        pass
+    return render_template('reminders_dashboard.html', current_round=current_round, first_kickoff=first_kickoff, cutoff_time=cutoff_time)
 
 @app.route('/admin/statistics')
 @admin_required

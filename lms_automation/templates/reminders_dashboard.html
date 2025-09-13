@@ -39,19 +39,16 @@
                         </div>
                         <div class="col-md-3">
                             <h6>First Kickoff</h6>
-                            {% if current_round.first_kickoff_at %}
-                                <p class="mb-0">{{ current_round.first_kickoff_at.strftime('%d %b %Y, %H:%M') }}</p>
-                            {% elif current_round.end_date %}
-                                <p class="mb-0">{{ current_round.end_date.strftime('%d %b %Y, %H:%M') }}</p>
+                            {% if first_kickoff %}
+                                <p class="mb-0">{{ first_kickoff.strftime('%d %b %Y, %H:%M') }}</p>
                             {% else %}
                                 <p class="mb-0 text-muted">Unknown</p>
                             {% endif %}
                         </div>
                         <div class="col-md-3">
                             <h6>Cutoff (Pick Deadline)</h6>
-                            {% set anchor = current_round.first_kickoff_at or current_round.end_date %}
-                            {% if anchor %}
-                                <p class="mb-0">{{ (anchor - timedelta(hours=1)).strftime('%d %b %Y, %H:%M') }}</p>
+                            {% if cutoff_time %}
+                                <p class="mb-0">{{ cutoff_time.strftime('%d %b %Y, %H:%M') }}</p>
                             {% else %}
                                 <p class="mb-0 text-muted">Unknown</p>
                             {% endif %}
