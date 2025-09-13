@@ -164,6 +164,14 @@ def _ensure_minimum_schema():
                     except Exception as e:
                         app.logger.warning(f'Could not add picks.{name}: {e}')
 
+            # Create reminder_schedules table if missing (fallback for environments without migrations)
+            if not insp.has_table('reminder_schedules'):
+                try:
+                    ReminderSchedule.__table__.create(bind=engine)
+                    app.logger.info('Created missing table reminder_schedules')
+                except Exception as e:
+                    app.logger.warning(f'Could not create reminder_schedules: {e}')
+
             db.session.commit()
     except Exception as e:
         db.session.rollback()
@@ -2865,10 +2873,10 @@ class WhatsAppReminder:
         # Customize message based on reminder type
         if reminder_type == '4_hour':
             urgency = "⏰ 4 hours left!"
-            time_msg = "You have 4 hours remaining"
+            time_msg = "You have 4 hours remaining before the 1-hour cutoff"
         elif reminder_type == '2_hour':
             urgency = "⏰ 2 hours left!"
-            time_msg = "Only 2 hours remaining"
+            time_msg = "Only 2 hours remaining before the 1-hour cutoff"
         else:
             urgency = "📝 Reminder"
             time_msg = "Don't forget"
