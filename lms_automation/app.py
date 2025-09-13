@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from flask_migrate import Migrate
 import os
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import urllib.parse
 from functools import wraps
 from io import BytesIO
@@ -11,6 +11,26 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.config.setdefault('DISPLAY_TIMEZONE', os.environ.get('DISPLAY_TIMEZONE', 'Europe/London'))
+
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:  # pragma: no cover
+    ZoneInfo = None
+
+def to_local(dt: datetime) -> datetime:
+    """Convert a naive/UTC datetime to configured display timezone.
+    Assumes naive datetimes are UTC.
+    """
+    if not dt:
+        return dt
+    try:
+        tz_name = app.config.get('DISPLAY_TIMEZONE', 'Europe/London')
+        tz = ZoneInfo(tz_name) if ZoneInfo else None
+        aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return aware.astimezone(tz) if tz else aware
+    except Exception:
+        return dt
 
 # --- Database configuration ---
 database_uri = os.environ.get('DATABASE_PUBLIC_URL') or os.environ.get('DATABASE_URL')
@@ -2953,7 +2973,11 @@ def get_due_reminders():
                 
                 if data:
                     data['reminder_id'] = reminder.id
-                    data['scheduled_time'] = reminder.scheduled_time.isoformat()
+                    # Provide local-time ISO for accurate browser rendering
+                    try:
+                        data['scheduled_time'] = to_local(reminder.scheduled_time).isoformat()
+                    except Exception:
+                        data['scheduled_time'] = reminder.scheduled_time.isoformat()
                     reminder_data.append(data)
                     
             return reminder_data
@@ -3018,9 +3042,10 @@ def reminders_dashboard():
     cutoff_time = None
     try:
         if current_round:
-            first_kickoff = current_round.first_kickoff_at or _earliest_kickoff_for_round(current_round) or current_round.end_date
-            if first_kickoff:
-                cutoff_time = first_kickoff - timedelta(hours=1)
+            anchor = current_round.first_kickoff_at or _earliest_kickoff_for_round(current_round) or current_round.end_date
+            if anchor:
+                first_kickoff = to_local(anchor)
+                cutoff_time = to_local(anchor - timedelta(hours=1))
     except Exception:
         pass
     return render_template('reminders_dashboard.html', current_round=current_round, first_kickoff=first_kickoff, cutoff_time=cutoff_time)
