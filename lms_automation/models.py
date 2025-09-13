@@ -236,8 +236,8 @@ class ReminderSchedule(db.Model):
                 reminder_type='2_hour'
             ).first()
             
-            # Create 4-hour reminder
-            if not existing_4h and four_hour_reminder > datetime.utcnow():
+            # Create 4-hour reminder (create even if scheduled time is in the past so it shows as due)
+            if not existing_4h:
                 reminder_4h = ReminderSchedule(
                     player_id=player.id,
                     round_id=round_id,
@@ -247,8 +247,8 @@ class ReminderSchedule(db.Model):
                 db.session.add(reminder_4h)
                 reminders_created += 1
             
-            # Create 2-hour reminder
-            if not existing_2h and two_hour_reminder > datetime.utcnow():
+            # Create 2-hour reminder (create even if scheduled time is in the past so it shows as due)
+            if not existing_2h:
                 reminder_2h = ReminderSchedule(
                     player_id=player.id,
                     round_id=round_id,
