@@ -2922,11 +2922,11 @@ Haven't picked yet? Don't get eliminated!
 Good luck! 🍀
 Last Man Standing"""
         
-        # Generate WhatsApp web link
+        # Generate WhatsApp link (prefer WhatsApp Web on desktop per request)
         encoded_message = message.replace('\n', '%0A').replace(' ', '%20')
         clean_number = player.whatsapp_number.replace('+', '')
-        # Use api.whatsapp.com to work on both mobile and desktop
-        whatsapp_link = f"https://api.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
+        # Use WhatsApp Web as default so it opens in the browser
+        whatsapp_link = f"https://web.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
         
         return {
             'player_name': player.name,
