@@ -34,9 +34,16 @@
                             <h2 class="text-primary mb-2">Round {{ current_round.round_number }}</h2>
                             <p class="text-muted mb-0">Premier League Matchday {{ current_round.pl_matchday }}</p>
                         </div>
-                        <span class="badge {% if current_round.status == 'active' %}bg-success{% elif current_round.status == 'pending' %}bg-warning{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">
-                            {{ current_round.status.title() }}
-                        </span>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge {% if current_round.status == 'active' %}bg-success{% elif current_round.status == 'pending' %}bg-warning{% else %}bg-secondary{% endif %} fs-6 px-3 py-2">
+                                {{ current_round.status.title() }}
+                            </span>
+                            {% if current_round.status == 'active' %}
+                            <button class="btn btn-sm btn-outline-secondary" id="completeRoundNowBtn" title="Mark this round as completed">
+                                <i class="fas fa-flag-checkered"></i> Complete Round
+                            </button>
+                            {% endif %}
+                        </div>
                     </div>
                     
                     {% if current_round.start_date or current_round.end_date %}
@@ -286,6 +293,31 @@ document.addEventListener('DOMContentLoaded', function() {
   loadPicksStatus();
   // Refresh periodically while admin has the page open
   setInterval(loadPicksStatus, 30000);
+
+  // Complete current round quickly
+  const completeBtn = document.getElementById('completeRoundNowBtn');
+  if (completeBtn) {
+    completeBtn.addEventListener('click', async () => {
+      if (!confirm('Complete the current round now? You can activate the next round afterwards.')) return;
+      try {
+        const res = await fetch('/api/rounds');
+        const rounds = await res.json();
+        const active = (rounds || []).find(r => r.status === 'active');
+        if (!active) { alert('No active round found.'); return; }
+        const resp = await fetch(`/api/rounds/${active.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'completed' })
+        });
+        const data = await resp.json();
+        if (!data.success) { alert(data.error || 'Failed to complete round'); return; }
+        alert(`Round ${active.round_number} marked as completed.`);
+        location.reload();
+      } catch (e) {
+        alert('Error completing round');
+      }
+    });
+  }
 
   // Apply auto-picks for missed players (manual, admin-triggered)
   const applyBtn = document.getElementById('applyAutoPicksBtn');
