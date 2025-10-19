@@ -376,45 +376,54 @@
 
 {% block scripts %}
 <script>
-// Premier League team abbreviations mapping
+// Mapping of team names to display labels (mirrors backend team_abbrev)
 function getTeamAbbreviation(teamName) {
-    const abbreviations = {
-        'Arsenal': 'ARS',
-        'Aston Villa': 'AVFC',
-        'Aston Villa FC': 'AVFC',
-        'AFC Bournemouth': 'BOU',
-        'Bournemouth': 'BOU',
-        'Bournemouth AFC': 'BOU',
-        'Brentford': 'BRE',
-        'Brighton': 'BHA',
-        'Brighton & Hove Albion': 'BHA',
-        'Burnley': 'BUR',
-        'Chelsea': 'CHE',
-        'Crystal Palace': 'CRY',
-        'Everton': 'EVE',
-        'Everton FC': 'EVE',
-        'Fulham': 'FUL',
-        'Liverpool': 'LIV',
-        'Liverpool FC': 'LIV',
-        'Luton Town': 'LUT',
-        'Manchester City': 'MCI',
-        'Manchester City FC': 'MCI',
-        'Manchester United': 'MUN',
-        'Manchester United FC': 'MUN',
-        'Newcastle': 'NEW',
-        'Newcastle United': 'NEW',
-        'Nottingham Forest': 'NOT',
-        'Sheffield United': 'SHE',
-        'Tottenham': 'TOT',
-        'Tottenham Hotspur': 'TOT',
-        'Tottenham Hotspur FC': 'TOT',
-        'West Ham': 'WHU',
-        'West Ham United': 'WHU',
-        'Wolves': 'WOL',
-        'Wolverhampton Wanderers': 'WOL'
+    const displayNames = {
+        'Arsenal': 'Arsenal',
+        'Aston Villa': 'Villa',
+        'Aston Villa FC': 'Villa',
+        'AFC Bournemouth': 'Bournmouth',
+        'Bournemouth': 'Bournmouth',
+        'Bournemouth AFC': 'Bournmouth',
+        'Brentford': 'Brentford',
+        'Brighton': 'Brighton',
+        'Brighton & Hove Albion': 'Brighton',
+        'Brighton and Hove Albion': 'Brighton',
+        'Burnley': 'Burnley',
+        'Chelsea': 'Chelsea',
+        'Crystal Palace': 'Palace',
+        'Palace': 'Palace',
+        'Everton': 'Everton',
+        'Everton FC': 'Everton',
+        'Fulham': 'Fulham',
+        'Leeds': 'Leeds',
+        'Leeds United': 'Leeds',
+        'Liverpool': 'Liverpool',
+        'Liverpool FC': 'Liverpool',
+        'Luton Town': 'Luton Town',
+        'Manchester City': 'Man City',
+        'Manchester City FC': 'Man City',
+        'Man City': 'Man City',
+        'Manchester United': 'Man UTD',
+        'Manchester United FC': 'Man UTD',
+        'Man United': 'Man UTD',
+        'Newcastle': 'Newcastle',
+        'Newcastle United': 'Newcastle',
+        'Nottingham Forest': 'Forest',
+        'Forest': 'Forest',
+        'Sheffield United': 'Sheffield United',
+        'Sunderland': 'Sunderland',
+        'Sunderland AFC': 'Sunderland',
+        'Tottenham': 'Spurs',
+        'Tottenham Hotspur': 'Spurs',
+        'Tottenham Hotspur FC': 'Spurs',
+        'Spurs': 'Spurs',
+        'West Ham': 'West Ham',
+        'West Ham United': 'West Ham',
+        'Wolves': 'Wolves',
+        'Wolverhampton Wanderers': 'Wolves'
     };
-    
-    return abbreviations[teamName] || teamName.substring(0, 3).toUpperCase();
+    return displayNames[teamName] || teamName;
 }
 
 let gridData = null;
