@@ -95,6 +95,15 @@ def set_round_special_measure(round_obj: Round, measure: str, note: str = None):
         db.session.rollback()
         app.logger.error(f"Failed to set special measure for round_id={getattr(round_obj, 'id', None)}: {e}")
 
+# --- Phone number sanitization ---
+def sanitize_phone_number(phone_number):
+    """Remove spaces, dashes, and parentheses from phone number, keeping only + and digits."""
+    if not phone_number:
+        return phone_number
+    # Remove spaces, dashes, parentheses, and other common formatting characters
+    sanitized = phone_number.replace(' ', '').replace('-', '').replace('(', '').replace(')', '').replace('.', '')
+    return sanitized
+
 # --- Winner detection ---
 def auto_detect_and_mark_winner():
     """If exactly one active player remains, mark them as winner.
@@ -542,7 +551,9 @@ def current_round_picks_status():
             ]
             msg = "\n".join(message_lines)
             encoded = msg.replace('\n', '%0A')
-            clean = ADMIN_WHATSAPP.replace('+', '')
+            # Sanitize and clean the admin number (remove spaces, dashes, then remove +)
+            sanitized_admin = sanitize_phone_number(ADMIN_WHATSAPP)
+            clean = sanitized_admin.replace('+', '')
             whatsapp_link = f"https://api.whatsapp.com/send?phone={clean}&text={encoded}"
 
         return jsonify({
@@ -754,7 +765,9 @@ def send_picks():
         
         # Only generate WhatsApp link if player has a WhatsApp number
         if player.whatsapp_number:
-            clean_number = player.whatsapp_number.replace('+', '')
+            # Sanitize and clean the number (remove spaces, dashes, then remove +)
+            sanitized_number = sanitize_phone_number(player.whatsapp_number)
+            clean_number = sanitized_number.replace('+', '')
             # Prepare both mobile and desktop links; we will choose client-side
             player.wa_link_mobile = f"https://api.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
             player.wa_link_desktop = f"https://web.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
@@ -2697,38 +2710,41 @@ def generate_registration_link():
     try:
         data = request.get_json()
         player_id = data.get('player_id')
-        
+
         if not player_id:
             return jsonify({'success': False, 'error': 'Player ID is required'}), 400
-        
+
         player = Player.query.get(player_id)
         if not player:
             return jsonify({'success': False, 'error': 'Player not found'}), 400
-        
+
         if not player.whatsapp_number:
             return jsonify({'success': False, 'error': 'Player does not have a WhatsApp number'}), 400
-        
+
         # Get base URL
         base_url = os.environ.get('BASE_URL')
         if not base_url:
             base_url = request.url_root.rstrip('/')
             if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
                 base_url = base_url.replace('http://', 'https://')
-        
+
         if not base_url.startswith(('http://', 'https://')):
             base_url = f"https://{base_url}"
-        
-        # Create registration link with the WhatsApp number
-        encoded_whatsapp = urllib.parse.quote(player.whatsapp_number, safe='')
+
+        # Sanitize the WhatsApp number (remove spaces, dashes, etc.)
+        sanitized_whatsapp = sanitize_phone_number(player.whatsapp_number)
+
+        # Create registration link with the sanitized WhatsApp number
+        encoded_whatsapp = urllib.parse.quote(sanitized_whatsapp, safe='')
         registration_url = f"{base_url}/register/{encoded_whatsapp}"
-        
+
         return jsonify({
-            'success': True, 
+            'success': True,
             'registration_url': registration_url,
             'whatsapp_number': player.whatsapp_number,
             'player_name': player.name
         })
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2954,7 +2970,9 @@ Last Man Standing"""
         
         # Generate WhatsApp link (prefer WhatsApp Web on desktop per request)
         encoded_message = message.replace('\n', '%0A').replace(' ', '%20')
-        clean_number = player.whatsapp_number.replace('+', '')
+        # Sanitize and clean the number (remove spaces, dashes, then remove +)
+        sanitized_number = sanitize_phone_number(player.whatsapp_number)
+        clean_number = sanitized_number.replace('+', '')
         # Use WhatsApp Web as default so it opens in the browser
         whatsapp_link = f"https://web.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
         
