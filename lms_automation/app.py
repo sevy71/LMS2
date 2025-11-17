@@ -808,9 +808,10 @@ def handle_players():
                 return jsonify({'success': False, 'error': 'Player with this name already exists'}), 400
             
             # Create new player
+            whatsapp = data.get('whatsapp_number', '').strip() or None
             player = Player(
                 name=data['name'].strip(),
-                whatsapp_number=data.get('whatsapp_number', '').strip() or None
+                whatsapp_number=sanitize_phone_number(whatsapp) if whatsapp else None
             )
             
             db.session.add(player)
@@ -856,7 +857,7 @@ def bulk_import_players():
                 # Create new player
                 player = Player(
                     name=name,
-                    whatsapp_number=whatsapp or None
+                    whatsapp_number=sanitize_phone_number(whatsapp) if whatsapp else None
                 )
                 
                 db.session.add(player)
@@ -906,7 +907,7 @@ def handle_player_by_id(player_id):
             
             # Update player
             player.name = name
-            player.whatsapp_number = whatsapp or None
+            player.whatsapp_number = sanitize_phone_number(whatsapp) if whatsapp else None
             
             db.session.commit()
             
@@ -2691,7 +2692,7 @@ def api_register_player():
         # Create new player
         player = Player(
             name=name,
-            whatsapp_number=whatsapp
+            whatsapp_number=sanitize_phone_number(whatsapp) if whatsapp else None
         )
         
         db.session.add(player)
