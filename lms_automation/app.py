@@ -2448,33 +2448,38 @@ def reset_game():
         fixtures_count = Fixture.query.count()
         picks_count = Pick.query.count()
         pick_tokens_count = PickToken.query.count()
+        reminder_schedules_count = ReminderSchedule.query.count()
         players_count = Player.query.count()
         
         # Delete in correct order to handle foreign key constraints
         # 1. Delete pick tokens (references players and rounds)
         PickToken.query.delete()
-        
+
         # 2. Delete all picks (references players and rounds)
         Pick.query.delete()
-        
-        # 3. Delete all fixtures (references rounds)
+
+        # 3. Delete reminder schedules (references players and rounds)
+        ReminderSchedule.query.delete()
+
+        # 4. Delete all fixtures (references rounds)
         Fixture.query.delete()
-        
-        # 4. Delete all rounds (now safe to delete)
+
+        # 5. Delete all rounds (now safe to delete)
         Round.query.delete()
-        
-        # 5. Reset all players to active status (but keep the player records)
+
+        # 6. Reset all players to active status (but keep the player records)
         Player.query.update({'status': 'active', 'unreachable': False})
-        
+
         # Commit all changes
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'rounds_deleted': rounds_count,
             'fixtures_deleted': fixtures_count,
             'picks_deleted': picks_count,
             'pick_tokens_deleted': pick_tokens_count,
+            'reminder_schedules_deleted': reminder_schedules_count,
             'players_reset': players_count
         })
         
