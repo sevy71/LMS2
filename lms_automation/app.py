@@ -922,14 +922,21 @@ def handle_player_by_id(player_id):
             # Check if player has any picks
             picks_count = Pick.query.filter_by(player_id=player_id).count()
             if picks_count > 0:
-                return jsonify({'success': False, 'error': f'Cannot delete player with {picks_count} existing picks'}), 400
-            
-            # Delete player
+                return jsonify({'success': False, 'error': f'Cannot delete player with {picks_count} existing picks. Reset the game first to delete all picks.'}), 400
+
+            # Delete related records in correct order to handle foreign keys
+            # 1. Delete pick tokens for this player
+            PickToken.query.filter_by(player_id=player_id).delete()
+
+            # 2. Delete reminder schedules for this player
+            ReminderSchedule.query.filter_by(player_id=player_id).delete()
+
+            # 3. Now safe to delete the player
             db.session.delete(player)
             db.session.commit()
-            
+
             return jsonify({'success': True})
-            
+
         except Exception as e:
             db.session.rollback()
             return jsonify({'success': False, 'error': str(e)}), 500
