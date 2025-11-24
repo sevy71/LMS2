@@ -2941,6 +2941,28 @@ class WhatsAppReminder:
         
         if not player.whatsapp_number:
             return None
+
+        # Determine anchor (kickoff) and cutoff (1 hour before kickoff) times
+        anchor_time = getattr(round_obj, 'first_kickoff_at', None) or getattr(round_obj, 'end_date', None)
+        cutoff_time = anchor_time - timedelta(hours=1) if anchor_time else None
+
+        def _format_time_remaining(target):
+            """Return a friendly countdown like '90 minutes' or '2 hours 15 minutes'."""
+            if not target:
+                return None
+            delta = target - datetime.utcnow()
+            total_minutes = int(delta.total_seconds() // 60)
+            if total_minutes <= 0:
+                return "moments"
+            hours, minutes = divmod(total_minutes, 60)
+            parts = []
+            if hours:
+                parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+            if minutes:
+                parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+            return " ".join(parts) if parts else "minutes"
+
+        time_remaining = _format_time_remaining(cutoff_time)
             
         # Get base URL
         base_url = os.environ.get('BASE_URL', 'https://localhost:5000')
@@ -2952,14 +2974,16 @@ class WhatsAppReminder:
         
         # Customize message based on reminder type
         if reminder_type == '4_hour':
-            urgency = "⏰ 4 hours left!"
-            time_msg = "You have 4 hours remaining before the 1-hour cutoff"
+            urgency = "⏰ Reminder"
         elif reminder_type == '2_hour':
-            urgency = "⏰ 2 hours left!"
-            time_msg = "Only 2 hours remaining before the 1-hour cutoff"
+            urgency = "⏰ Reminder"
         else:
             urgency = "📝 Reminder"
-            time_msg = "Don't forget"
+
+        if time_remaining:
+            time_msg = f"You have about {time_remaining} before the pick window closes (1 hour before kickoff)."
+        else:
+            time_msg = "Don't forget to submit your pick before the cutoff."
         
         message = f"""{urgency}
 
