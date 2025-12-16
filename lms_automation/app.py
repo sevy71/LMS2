@@ -125,7 +125,8 @@ def auto_detect_and_mark_winner():
 
 # --- Optional auto-migration on startup (useful for Railway/Heroku) ---
 def _auto_run_migrations_if_enabled():
-    flag = os.environ.get('AUTO_MIGRATE', 'true').lower()
+    # Temporarily disabled - migration conflicts with existing database
+    flag = os.environ.get('AUTO_MIGRATE', 'false').lower()
     if flag in ('1', 'true', 'yes', 'on'):
         try:
             from flask_migrate import upgrade as _upgrade
@@ -135,7 +136,7 @@ def _auto_run_migrations_if_enabled():
         except Exception as e:
             app.logger.warning(f'Auto-migration failed or skipped: {e}')
 
-_auto_run_migrations_if_enabled()
+# _auto_run_migrations_if_enabled()  # Disabled temporarily
 
 # --- Fallback: Ensure required columns exist (for environments where migrations didn't run) ---
 from sqlalchemy import inspect, text
