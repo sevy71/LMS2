@@ -123,6 +123,68 @@ def auto_detect_and_mark_winner():
         app.logger.warning(f"Winner auto-detection failed: {e}")
         return None
 
+def handle_rollover_scenario():
+    """Handle rollover scenario where all remaining players lost in the same round.
+    When this happens, all eliminated players from the current round should be reactivated.
+    Also updates the next round to be Round 1 of the next cycle.
+    Returns a dict with rollover info if handled, None otherwise.
+    """
+    try:
+        # Check if we have zero active players
+        active_count = Player.query.filter_by(status='active').count()
+
+        if active_count == 0:
+            # Get the most recently completed round
+            last_completed_round = Round.query.filter_by(status='completed').order_by(Round.id.desc()).first()
+
+            if last_completed_round:
+                # Find all players who had picks in this round (they all lost and need to advance)
+                players_in_round = db.session.query(Player).join(Pick).filter(
+                    Pick.round_id == last_completed_round.id,
+                    Player.status == 'eliminated'
+                ).distinct().all()
+
+                if players_in_round:
+                    app.logger.info(f"ROLLOVER DETECTED: All {len(players_in_round)} players lost in round {last_completed_round.round_number}")
+
+                    # Reactivate all players who participated in the round
+                    for player in players_in_round:
+                        player.status = 'active'
+                        db.session.add(player)
+
+                    # Calculate the next cycle number
+                    current_cycle = last_completed_round.cycle_number or 1
+                    next_cycle = current_cycle + 1
+
+                    # Update any pending rounds to be Round 1 of the next cycle
+                    next_round = Round.query.filter_by(status='pending').order_by(Round.id).first()
+                    if not next_round:
+                        # Check for active round that was just created
+                        next_round = Round.query.filter_by(status='active').order_by(Round.id.desc()).first()
+
+                    if next_round and next_round.id > last_completed_round.id:
+                        # This is a rollover, so reset to Round 1 of next cycle
+                        next_round.round_number = 1
+                        next_round.cycle_number = next_cycle
+                        db.session.add(next_round)
+                        app.logger.info(f"ROLLOVER: Next round set to Round 1 of Cycle {next_cycle}")
+
+                    db.session.commit()
+                    app.logger.info(f"ROLLOVER HANDLED: Reactivated {len(players_in_round)} players for Round 1 of Cycle {next_cycle}")
+
+                    return {
+                        'handled': True,
+                        'players_reactivated': len(players_in_round),
+                        'next_cycle': next_cycle,
+                        'next_round_number': 1
+                    }
+
+        return None
+    except Exception as e:
+        app.logger.error(f"Error handling rollover scenario: {e}")
+        db.session.rollback()
+        return None
+
 # --- Optional auto-migration on startup (useful for Railway/Heroku) ---
 def _auto_run_migrations_if_enabled():
     # Temporarily disabled - migration conflicts with existing database
@@ -1281,9 +1343,11 @@ def handle_round_by_id(round_id):
             
             old_status = round_obj.status
             round_obj.status = new_status
-            # If admin marks a round as completed, also attempt winner detection
+            # If admin marks a round as completed, also attempt winner detection and handle rollover
             if new_status == 'completed':
                 auto_detect_and_mark_winner()
+                # Handle rollover scenario where all players were eliminated
+                handle_rollover_scenario()
             db.session.commit()
             
             return jsonify({
@@ -2254,18 +2318,27 @@ def process_round_results(round_id):
         # Only mark round as completed if all fixtures have been processed
         total_fixtures = Fixture.query.filter_by(round_id=round_id).count()
         completed_fixtures = Fixture.query.filter_by(round_id=round_id, status='completed').count()
-        
+
+        rollover_info = None
         if completed_fixtures == total_fixtures:
             round_obj.status = 'completed'
             # If round fully completed, check if there is a single remaining active player and mark winner
             auto_detect_and_mark_winner()
-        
+
+            # Handle rollover scenario where all players were eliminated
+            rollover_info = handle_rollover_scenario()
+            if rollover_info:
+                # Update the surviving_players list to reflect the reactivated players
+                reactivated_players = Player.query.filter_by(status='active').all()
+                surviving_players = [p.name for p in reactivated_players]
+                eliminated_players = []  # All players advance in rollover
+
         db.session.commit()
-        
+
         # Auto-generate XLSX file after processing results
         xlsx_file = generate_picks_grid_xlsx()
         xlsx_filename = None
-        
+
         if xlsx_file:
             # Save the file to disk for direct WhatsApp sharing
             try:
@@ -2275,11 +2348,11 @@ def process_round_results(round_id):
                 with open(filepath, 'wb') as f:
                     f.write(xlsx_file.getvalue())
                 print(f"XLSX file automatically generated after processing round {round_id} results: {filepath}")
-                
+
             except Exception as e:
                 print(f"Warning: Could not save XLSX file to disk: {e}")
-        
-        return jsonify({
+
+        response_data = {
             'success': True,
             'eliminated_players': list(set(eliminated_players)),
             'surviving_players': list(set(surviving_players)),
@@ -2287,7 +2360,16 @@ def process_round_results(round_id):
             'total_surviving': len(set(surviving_players)),
             'xlsx_generated': xlsx_file is not None,
             'xlsx_filename': xlsx_filename
-        })
+        }
+
+        # Add rollover information if it was handled
+        if rollover_info:
+            response_data['rollover_detected'] = True
+            response_data['rollover_message'] = f'Rollover scenario detected! All {rollover_info["players_reactivated"]} players have been reactivated for Round 1 of Cycle {rollover_info["next_cycle"]}.'
+            response_data['next_round_number'] = rollover_info['next_round_number']
+            response_data['next_cycle'] = rollover_info['next_cycle']
+
+        return jsonify(response_data)
         
     except Exception as e:
         db.session.rollback()
@@ -2546,14 +2628,20 @@ def make_pick(token):
     # Get fixtures for this round
     fixtures = Fixture.query.filter_by(round_id=round_obj.id).all()
     print(f"Found {len(fixtures)} fixtures for round {round_obj.id} (round number {round_obj.round_number})")
-    
+
     # If no fixtures exist, this indicates a problem with round creation
     if not fixtures:
         print(f"ERROR: No fixtures found for round {round_obj.id}. This round may have been created without fixtures.")
-    
-    # Get player's previous picks to prevent reusing teams
-    previous_picks = Pick.query.filter_by(player_id=player.id).all()
+
+    # Get player's previous picks for THIS CYCLE ONLY to prevent reusing teams
+    # This ensures teams become available again after a rollover (new cycle)
+    current_cycle = round_obj.cycle_number or 1
+    previous_picks = Pick.query.filter_by(player_id=player.id).join(Round).filter(
+        Round.cycle_number == current_cycle
+    ).all()
     used_teams = [pick.team_picked for pick in previous_picks]
+
+    print(f"Player {player.name} in Cycle {current_cycle}: {len(used_teams)} teams used this cycle")
     
     # Create a normalized team matching function to handle name variations
     def normalize_team_name(team_name):
@@ -2896,9 +2984,13 @@ def get_player_upcoming_fixtures(token):
         
         # Get fixtures for current round
         fixtures = Fixture.query.filter_by(round_id=current_round.id).all()
-        
-        # Get player's used teams
-        previous_picks = Pick.query.filter_by(player_id=player.id).all()
+
+        # Get player's used teams for THIS CYCLE ONLY
+        # This ensures teams become available again after a rollover (new cycle)
+        current_cycle = current_round.cycle_number or 1
+        previous_picks = Pick.query.filter_by(player_id=player.id).join(Round).filter(
+            Round.cycle_number == current_cycle
+        ).all()
         used_teams = [pick.team_picked for pick in previous_picks]
         
         # Check if player has already picked for current round
