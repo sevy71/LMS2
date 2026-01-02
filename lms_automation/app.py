@@ -501,14 +501,31 @@ def picks_grid():
 def get_picks_grid_data():
     """Provide data for the picks grid."""
     try:
-        rounds = Round.query.order_by(Round.round_number).all()
+        # Get filter parameter - default to current cycle
+        cycle_filter = request.args.get('cycle', 'current')
+
+        # Determine which cycles to show
+        if cycle_filter == 'all':
+            rounds = Round.query.order_by(Round.cycle_number, Round.round_number).all()
+        else:
+            # Get current cycle (the highest cycle number with an active/pending round, or latest completed)
+            current_round = Round.query.filter(Round.status.in_(['active', 'pending'])).order_by(Round.id.desc()).first()
+            if not current_round:
+                current_round = Round.query.order_by(Round.id.desc()).first()
+
+            if current_round:
+                current_cycle = current_round.cycle_number or 1
+                rounds = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number).all()
+            else:
+                rounds = []
+
         players = Player.query.order_by(Player.name).all()
         picks = Pick.query.all()
 
         # Create mappings
         picks_map = {}
         results_map = {}
-        
+
         for pick in picks:
             key = (pick.player_id, pick.round_id)
             picks_map[key] = pick.team_picked
@@ -517,34 +534,58 @@ def get_picks_grid_data():
                 'is_eliminated': pick.is_eliminated
             }
 
+        # Prepare rounds data with cycle information
+        rounds_data = []
+        for r in rounds:
+            cycle_num = r.cycle_number or 1
+            # Create a unique key that includes cycle info
+            round_key = f"C{cycle_num}-R{r.round_number}"
+            rounds_data.append({
+                'id': r.id,
+                'round_number': r.round_number,
+                'cycle_number': cycle_num,
+                'round_key': round_key,
+                'label': f"R{r.round_number}" if cycle_filter != 'all' else round_key
+            })
+
         # Prepare player data
         players_data = []
         for player in players:
             player_picks = {}
-            
+
             for r in rounds:
                 key = (player.id, r.id)
+                cycle_num = r.cycle_number or 1
+                round_key = f"C{cycle_num}-R{r.round_number}"
+
                 if key in picks_map:
                     team = picks_map[key]
                     result = results_map[key]
-                    player_picks[r.round_number] = {
+                    player_picks[round_key] = {
                         'team': team,
                         'is_winner': result['is_winner'],
                         'is_eliminated': result['is_eliminated']
                     }
                 else:
-                    player_picks[r.round_number] = None
-            
+                    player_picks[round_key] = None
+
             players_data.append({
                 'name': player.name,
                 'status': player.status,
                 'picks': player_picks
             })
 
+        # Get available cycles for filtering
+        all_cycles = db.session.query(Round.cycle_number).distinct().order_by(Round.cycle_number).all()
+        available_cycles = [c[0] or 1 for c in all_cycles]
+
         return jsonify({
             'success': True,
-            'rounds': [r.round_number for r in rounds],
-            'players': players_data
+            'rounds': rounds_data,
+            'players': players_data,
+            'available_cycles': available_cycles,
+            'current_cycle': current_round.cycle_number or 1 if current_round else 1,
+            'cycle_filter': cycle_filter
         })
 
     except Exception as e:

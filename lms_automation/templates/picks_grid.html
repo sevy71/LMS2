@@ -454,7 +454,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Load data
-    fetch('/api/picks-grid-data')
+    fetch('/api/picks-grid-data?cycle=current')
         .then(response => response.json())
         .then(data => {
             if (data.success) {
@@ -463,10 +463,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 const rounds = data.rounds || [];
                 const roundSelect = document.getElementById('roundSelect');
                 if (rounds.length > 0 && roundSelect) {
-                    roundSelect.innerHTML = rounds.map(r => `<option value="${r}">R${r}</option>`).join('');
-                    currentRoundNumber = Math.max(...rounds);
-                    roundSelect.value = String(currentRoundNumber);
+                    roundSelect.innerHTML = rounds.map(r => `<option value="${r.round_key}">${r.label}</option>`).join('');
+                    // Select the latest round
+                    if (rounds.length > 0) {
+                        const latestRound = rounds[rounds.length - 1];
+                        currentRoundNumber = latestRound.round_key;
+                        roundSelect.value = currentRoundNumber;
+                    }
                 }
+
+                // Add cycle selector if multiple cycles exist
+                addCycleSelector(data);
 
                 renderByView();
                 setupEventListeners();
@@ -478,6 +485,39 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('Error fetching picks grid data:', error);
             gridContainer.innerHTML = '<div class="alert alert-danger">Could not fetch data from the server.</div>';
         });
+
+    function addCycleSelector(data) {
+        // Add cycle filter dropdown to the controls if there are multiple cycles
+        if (!data.available_cycles || data.available_cycles.length <= 1) return;
+
+        const controlsArea = document.querySelector('.card-header .d-flex.flex-wrap.gap-1');
+        if (!controlsArea) return;
+
+        const cycleSelectHtml = `
+            <select id="cycleFilter" class="form-select form-select-sm" style="width: auto; display: inline-block;">
+                <option value="current">Current Cycle (${data.current_cycle})</option>
+                <option value="all">All Cycles</option>
+                ${data.available_cycles.map(c => `<option value="${c}">Cycle ${c}</option>`).join('')}
+            </select>
+        `;
+
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = cycleSelectHtml;
+        controlsArea.insertBefore(tempDiv.firstElementChild, controlsArea.firstChild);
+
+        // Add change listener
+        document.getElementById('cycleFilter').addEventListener('change', function(e) {
+            const cycle = e.target.value;
+            fetch(`/api/picks-grid-data?cycle=${cycle}`)
+                .then(response => response.json())
+                .then(newData => {
+                    if (newData.success) {
+                        gridData = newData;
+                        renderByView();
+                    }
+                });
+        });
+    }
 
     function sortPlayersForProgress(players) {
         // Active first, then by teams picked (descending), then name
@@ -571,23 +611,25 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         } else if (sortBy === 'latestRound') {
             // Sort by latest round pick in ascending order
-            const latestRound = Math.max(...rounds);
-            players.sort((a, b) => {
-                const aLatestPick = a.picks[latestRound];
-                const bLatestPick = b.picks[latestRound];
-                
-                // Players without picks go to the end
-                if (!aLatestPick && !bLatestPick) return a.name.localeCompare(b.name);
-                if (!aLatestPick) return 1;
-                if (!bLatestPick) return -1;
-                
-                // Sort by team name in ascending order
-                const teamCompare = aLatestPick.team.localeCompare(bLatestPick.team);
-                if (teamCompare !== 0) return teamCompare;
-                
-                // Secondary sort by name if same team
-                return a.name.localeCompare(b.name);
-            });
+            const latestRound = rounds.length > 0 ? rounds[rounds.length - 1].round_key : null;
+            if (latestRound) {
+                players.sort((a, b) => {
+                    const aLatestPick = a.picks[latestRound];
+                    const bLatestPick = b.picks[latestRound];
+
+                    // Players without picks go to the end
+                    if (!aLatestPick && !bLatestPick) return a.name.localeCompare(b.name);
+                    if (!aLatestPick) return 1;
+                    if (!bLatestPick) return -1;
+
+                    // Sort by team name in ascending order
+                    const teamCompare = aLatestPick.team.localeCompare(bLatestPick.team);
+                    if (teamCompare !== 0) return teamCompare;
+
+                    // Secondary sort by name if same team
+                    return a.name.localeCompare(b.name);
+                });
+            }
         }
 
         // Determine which round columns to render (compact on mobile)
@@ -596,15 +638,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Create spreadsheet grid structure
         let gridHtml = '<div class="spreadsheet-grid" style="grid-template-columns: 180px 1fr;">';
-        
+
         // Top-left corner
         gridHtml += '<div class="grid-corner">Player</div>';
-        
+
         // Headers
         gridHtml += '<div class="grid-headers">';
-        roundsToRender.forEach((roundNumber, index) => {
-            gridHtml += `<div class="header-cell" data-round="${roundNumber}" data-col-index="${index}">
-                R${roundNumber}
+        roundsToRender.forEach((round, index) => {
+            gridHtml += `<div class="header-cell" data-round="${round.round_key}" data-col-index="${index}">
+                ${round.label}
                 <div class="resize-handle" data-col-index="${index}"></div>
             </div>`;
         });
@@ -615,7 +657,7 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>`;
         }
         gridHtml += '</div>';
-        
+
         // Name column
         gridHtml += '<div class="grid-names">';
         let currentGroup = '';
@@ -629,12 +671,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span class="status-badge ${badgeClass}">${groupName} Players</span>
                 </div>`;
             }
-            
+
             const statusClass = `player-${player.status}`;
             gridHtml += `<div class="name-cell ${statusClass}">${player.name}</div>`;
         });
         gridHtml += '</div>';
-        
+
         // Data grid
         gridHtml += '<div class="grid-data" id="dataGrid">';
         currentGroup = '';
@@ -644,13 +686,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 currentGroup = player.status;
                 gridHtml += '<div class="data-row"><div class="group-header"></div></div>';
             }
-            
+
             gridHtml += '<div class="data-row">';
-            
+
             // Round columns
-            roundsToRender.forEach(roundNumber => {
-                const pickData = player.picks[roundNumber];
-                const pickInfo = getPickInfo(pickData, roundNumber);
+            roundsToRender.forEach(round => {
+                const pickData = player.picks[round.round_key];
+                const pickInfo = getPickInfo(pickData, round.round_key);
                 gridHtml += `<div class="data-cell ${pickInfo.class}" title="${pickInfo.tooltip}">${pickInfo.display}</div>`;
             });
 
