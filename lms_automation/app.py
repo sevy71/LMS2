@@ -1902,7 +1902,24 @@ def export_picks_grid_csv():
         from io import StringIO
         from flask import make_response
 
-        rounds = Round.query.order_by(Round.round_number).all()
+        # Get cycle filter parameter - default to current cycle
+        cycle_filter = request.args.get('cycle', 'current')
+
+        # Determine which cycles to show (same logic as API endpoint)
+        if cycle_filter == 'all':
+            rounds = Round.query.order_by(Round.cycle_number, Round.round_number).all()
+        else:
+            # Get current cycle
+            current_round = Round.query.filter(Round.status.in_(['active', 'pending'])).order_by(Round.id.desc()).first()
+            if not current_round:
+                current_round = Round.query.order_by(Round.id.desc()).first()
+
+            if current_round:
+                current_cycle = current_round.cycle_number or 1
+                rounds = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number).all()
+            else:
+                rounds = []
+
         players = Player.query.order_by(Player.name).all()
 
         # Build a quick lookup for picks
@@ -2000,7 +2017,24 @@ def export_picks_grid_excel():
     try:
         from flask import make_response
 
-        rounds = Round.query.order_by(Round.round_number).all()
+        # Get cycle filter parameter - default to current cycle
+        cycle_filter = request.args.get('cycle', 'current')
+
+        # Determine which cycles to show (same logic as API endpoint)
+        if cycle_filter == 'all':
+            rounds = Round.query.order_by(Round.cycle_number, Round.round_number).all()
+        else:
+            # Get current cycle
+            current_round = Round.query.filter(Round.status.in_(['active', 'pending'])).order_by(Round.id.desc()).first()
+            if not current_round:
+                current_round = Round.query.order_by(Round.id.desc()).first()
+
+            if current_round:
+                current_cycle = current_round.cycle_number or 1
+                rounds = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number).all()
+            else:
+                rounds = []
+
         players = Player.query.order_by(Player.name).all()
         picks = Pick.query.all()
         pick_map = {(p.player_id, p.round_id): p for p in picks}
@@ -2102,7 +2136,23 @@ def export_picks_grid_xlsx():
         from openpyxl.utils import get_column_letter
         from flask import make_response
 
-        rounds = Round.query.order_by(Round.round_number).all()
+        # Get cycle filter parameter - default to current cycle
+        cycle_filter = request.args.get('cycle', 'current')
+
+        # Determine which cycles to show (same logic as API endpoint)
+        if cycle_filter == 'all':
+            rounds = Round.query.order_by(Round.cycle_number, Round.round_number).all()
+        else:
+            # Get current cycle
+            current_round = Round.query.filter(Round.status.in_(['active', 'pending'])).order_by(Round.id.desc()).first()
+            if not current_round:
+                current_round = Round.query.order_by(Round.id.desc()).first()
+
+            if current_round:
+                current_cycle = current_round.cycle_number or 1
+                rounds = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number).all()
+            else:
+                rounds = []
         players = Player.query.order_by(Player.name).all()
         picks = Pick.query.all()
         pick_map = {(p.player_id, p.round_id): p for p in picks}

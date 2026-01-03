@@ -1029,13 +1029,19 @@ document.addEventListener('DOMContentLoaded', function() {
         const exportGridBtn = document.getElementById('exportGrid');
         if (exportGridBtn) {
             exportGridBtn.addEventListener('click', function() {
-                window.location.href = '/api/export/picks-grid';
+                // Get current cycle filter value
+                const cycleFilter = document.getElementById('cycleFilter');
+                const cycle = cycleFilter ? cycleFilter.value : 'current';
+                window.location.href = `/api/export/picks-grid?cycle=${cycle}`;
             });
         }
         const exportGridExcelBtn = document.getElementById('exportGridExcel');
         if (exportGridExcelBtn) {
             exportGridExcelBtn.addEventListener('click', function() {
-                window.location.href = '/api/export/picks-grid-xlsx';
+                // Get current cycle filter value
+                const cycleFilter = document.getElementById('cycleFilter');
+                const cycle = cycleFilter ? cycleFilter.value : 'current';
+                window.location.href = `/api/export/picks-grid-xlsx?cycle=${cycle}`;
             });
         }
         // Round export buttons removed to declutter the page
