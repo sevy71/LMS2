@@ -156,18 +156,22 @@ def handle_rollover_scenario():
                     current_cycle = last_completed_round.cycle_number or 1
                     next_cycle = current_cycle + 1
 
-                    # Update any pending rounds to be Round 1 of the next cycle
-                    next_round = Round.query.filter_by(status='pending').order_by(Round.id).first()
-                    if not next_round:
-                        # Check for active round that was just created
-                        next_round = Round.query.filter_by(status='active').order_by(Round.id.desc()).first()
+                    # Update ALL non-completed rounds to be part of the next cycle
+                    # This handles both newly created rounds and rounds created before the rollover
+                    future_rounds = Round.query.filter(
+                        Round.status.in_(['pending', 'active']),
+                        Round.id > last_completed_round.id
+                    ).all()
 
-                    if next_round and next_round.id > last_completed_round.id:
-                        # This is a rollover, so reset to Round 1 of next cycle
-                        next_round.round_number = 1
-                        next_round.cycle_number = next_cycle
-                        db.session.add(next_round)
-                        app.logger.info(f"ROLLOVER: Next round set to Round 1 of Cycle {next_cycle}")
+                    if future_rounds:
+                        # Reset round numbers starting from 1 for the new cycle
+                        for idx, round_obj in enumerate(sorted(future_rounds, key=lambda r: r.id), start=1):
+                            round_obj.round_number = idx
+                            round_obj.cycle_number = next_cycle
+                            db.session.add(round_obj)
+                            app.logger.info(f"ROLLOVER: Updated round {round_obj.id} to Round {idx} of Cycle {next_cycle}")
+                    else:
+                        app.logger.warning("ROLLOVER: No future rounds found to update")
 
                     db.session.commit()
                     app.logger.info(f"ROLLOVER HANDLED: Reactivated {len(players_in_round)} players for Round 1 of Cycle {next_cycle}")
