@@ -105,6 +105,46 @@ def sanitize_phone_number(phone_number):
     return sanitized
 
 # --- Winner detection ---
+def get_current_active_round():
+    """Get the current active round, prioritizing the highest cycle.
+    This ensures that after a rollover, we always target the new cycle's active round.
+
+    Returns:
+        Round object or None
+
+    Side effects:
+        - Logs warning if multiple active rounds exist
+        - Auto-deactivates (marks completed) any active rounds from older cycles
+    """
+    try:
+        # Find all active rounds
+        active_rounds = Round.query.filter_by(status='active').order_by(Round.cycle_number.desc(), Round.id.desc()).all()
+
+        if not active_rounds:
+            return None
+
+        if len(active_rounds) == 1:
+            return active_rounds[0]
+
+        # Multiple active rounds detected - select the one from the highest cycle
+        current_round = active_rounds[0]  # Already ordered by cycle desc
+
+        app.logger.warning(f"MULTIPLE ACTIVE ROUNDS DETECTED: {len(active_rounds)} active rounds found. Selecting Round {current_round.round_number} from Cycle {current_round.cycle_number}")
+
+        # Auto-deactivate stale rounds from older cycles
+        for old_round in active_rounds[1:]:
+            if old_round.cycle_number < current_round.cycle_number:
+                app.logger.warning(f"Auto-deactivating stale Round {old_round.round_number} from Cycle {old_round.cycle_number} (older than current Cycle {current_round.cycle_number})")
+                old_round.status = 'completed'
+                db.session.add(old_round)
+
+        db.session.commit()
+        return current_round
+
+    except Exception as e:
+        app.logger.error(f"Error getting current active round: {e}")
+        return None
+
 def auto_detect_and_mark_winner():
     """If exactly one active player remains, mark them as winner.
     Does nothing if zero or multiple active players remain, or if a winner is already marked.
@@ -603,15 +643,15 @@ def index():
 @admin_required
 def admin_dashboard():
     players = Player.query.all()
-    current_round = Round.query.filter_by(status='active').first()
+    current_round = get_current_active_round()
     return render_template('admin_dashboard.html', players=players, current_round=current_round)
 
 @app.route('/api/admin/current-round-picks-status')
 @admin_required
 def current_round_picks_status():
-    """Return pick submission status for the active round: counts, who’s missing, and an optional WhatsApp link for admin when complete."""
+    """Return pick submission status for the active round: counts, who's missing, and an optional WhatsApp link for admin when complete."""
     try:
-        round_obj = Round.query.filter_by(status='active').first()
+        round_obj = get_current_active_round()
         if not round_obj:
             return jsonify({
                 'success': True,
@@ -810,10 +850,11 @@ def apply_missed_picks(round_id):
 
 @app.route('/send_picks')
 def send_picks():
-    current_round = Round.query.filter_by(status='active').first()
+    current_round = get_current_active_round()
     if not current_round:
         return "No active round found", 404
 
+    app.logger.info(f"Sending picks for Round {current_round.round_number}, Cycle {current_round.cycle_number}")
     active_players = Player.query.filter_by(status='active').all()
     
     for player in active_players:
@@ -1386,13 +1427,18 @@ def handle_round_by_id(round_id):
                 
             if new_status not in ['pending', 'active', 'completed']:
                 return jsonify({'success': False, 'error': 'Invalid status. Must be pending, active, or completed'}), 400
-            
-            # If activating a round, deactivate any other active rounds
+
+            # If activating a round, deactivate ALL other active rounds (especially from older cycles)
             if new_status == 'active':
-                current_active = Round.query.filter_by(status='active').first()
-                if current_active and current_active.id != round_id:
-                    current_active.status = 'completed'
-            
+                other_active_rounds = Round.query.filter(
+                    Round.status == 'active',
+                    Round.id != round_id
+                ).all()
+                for old_round in other_active_rounds:
+                    app.logger.warning(f"Auto-deactivating Round {old_round.round_number} (Cycle {old_round.cycle_number}) when activating Round {round_obj.round_number} (Cycle {round_obj.cycle_number})")
+                    old_round.status = 'completed'
+                    db.session.add(old_round)
+
             old_status = round_obj.status
             round_obj.status = new_status
             # If admin marks a round as completed, also attempt winner detection and handle rollover
@@ -2984,8 +3030,8 @@ def player_dashboard(token):
         return render_template('pick_error.html', error="Invalid dashboard link", player_nav_only=True), 404
     
     player = pick_token.player
-    current_round = Round.query.filter_by(status='active').first()
-    
+    current_round = get_current_active_round()
+
     return render_template('player_dashboard.html', 
                          player=player, 
                          current_round=current_round,
@@ -3073,8 +3119,8 @@ def get_player_upcoming_fixtures(token):
     
     try:
         player = pick_token.player
-        current_round = Round.query.filter_by(status='active').first()
-        
+        current_round = get_current_active_round()
+
         if not current_round:
             return jsonify({
                 'success': True,
@@ -3219,7 +3265,7 @@ def get_due_reminders():
         with app.app_context():
             # Lazy auto-schedule: ensure reminders exist for the active round
             try:
-                active_round = Round.query.filter_by(status='active').first()
+                active_round = get_current_active_round()
                 if active_round:
                     ReminderSchedule.create_reminders_for_round(active_round.id)
             except Exception as _e:
@@ -3317,7 +3363,7 @@ def mark_reminder_sent(reminder_id):
 @admin_required
 def reminders_dashboard():
     """Admin page for managing reminders"""
-    current_round = Round.query.filter_by(status='active').first()
+    current_round = get_current_active_round()
     # Derive first kickoff for display if not stored on the round
     first_kickoff = None
     cutoff_time = None
