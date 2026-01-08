@@ -204,23 +204,25 @@ def handle_rollover_scenario():
                     ).all()
 
                     if future_rounds:
-                        # Reset round numbers starting from 1 for the new cycle
-                        for idx, round_obj in enumerate(sorted(future_rounds, key=lambda r: r.id), start=1):
-                            round_obj.round_number = idx
+                        # Update cycle_number for future rounds, but KEEP their round_number (global sequence)
+                        for round_obj in future_rounds:
                             round_obj.cycle_number = next_cycle
                             db.session.add(round_obj)
-                            app.logger.info(f"ROLLOVER: Updated round {round_obj.id} to Round {idx} of Cycle {next_cycle}")
+                            app.logger.info(f"ROLLOVER: Updated round {round_obj.id} (Round {round_obj.round_number}) to Cycle {next_cycle}")
                     else:
                         app.logger.warning("ROLLOVER: No future rounds found to update")
 
                     db.session.commit()
-                    app.logger.info(f"ROLLOVER HANDLED: Reactivated {len(players_in_round)} players for Round 1 of Cycle {next_cycle}")
+
+                    # Determine the next round number in the sequence
+                    next_round_num = future_rounds[0].round_number if future_rounds else (last_completed_round.round_number + 1)
+                    app.logger.info(f"ROLLOVER HANDLED: Reactivated {len(players_in_round)} players for Cycle {next_cycle}, next round is {next_round_num}")
 
                     return {
                         'handled': True,
                         'players_reactivated': len(players_in_round),
                         'next_cycle': next_cycle,
-                        'next_round_number': 1
+                        'next_round_number': next_round_num
                     }
 
         return None
@@ -1114,9 +1116,9 @@ def handle_rounds():
             # Auto-assign round_number if not provided
             round_number = data.get('round_number')
             if not round_number:
-                # Find max round_number within current cycle
-                max_round_in_cycle = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number.desc()).first()
-                round_number = (max_round_in_cycle.round_number + 1) if max_round_in_cycle else 1
+                # Find max round_number GLOBALLY (not per-cycle) to continue sequence
+                max_round_global = Round.query.order_by(Round.round_number.desc()).first()
+                round_number = (max_round_global.round_number + 1) if max_round_global else 1
 
             # Cycle-aware duplicate check: block only if (round_number, cycle_number) pair exists
             existing_round = Round.query.filter_by(round_number=round_number, cycle_number=current_cycle).first()
