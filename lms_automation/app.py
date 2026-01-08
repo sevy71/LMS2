@@ -1065,45 +1065,52 @@ def handle_rounds():
     elif request.method == 'POST':
         try:
             data = request.get_json()
-            
-            if not data or not data.get('round_number'):
-                return jsonify({'success': False, 'error': 'Round number is required'}), 400
-            
-            round_number = data['round_number']
-            
-            # Check if round number already exists
-            existing_round = Round.query.filter_by(round_number=round_number).first()
+
+            # Auto-detect current cycle (max cycle_number in DB, treat None as 1)
+            max_cycle_row = db.session.query(db.func.max(Round.cycle_number)).scalar()
+            current_cycle = max_cycle_row if max_cycle_row is not None else 1
+
+            # Auto-assign round_number if not provided
+            round_number = data.get('round_number')
+            if not round_number:
+                # Find max round_number within current cycle
+                max_round_in_cycle = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number.desc()).first()
+                round_number = (max_round_in_cycle.round_number + 1) if max_round_in_cycle else 1
+
+            # Cycle-aware duplicate check: block only if (round_number, cycle_number) pair exists
+            existing_round = Round.query.filter_by(round_number=round_number, cycle_number=current_cycle).first()
             if existing_round:
-                return jsonify({'success': False, 'error': f'Round {round_number} already exists'}), 400
-            
+                return jsonify({'success': False, 'error': f'Round {round_number} already exists in Cycle {current_cycle}'}), 400
+
             # Parse dates if provided
             start_date = None
             end_date = None
-            
+
             if data.get('start_date'):
                 try:
                     start_date = datetime.fromisoformat(data['start_date'].replace('T', ' '))
                 except ValueError:
                     return jsonify({'success': False, 'error': 'Invalid start date format'}), 400
-            
+
             if data.get('end_date'):
                 try:
                     end_date = datetime.fromisoformat(data['end_date'].replace('T', ' '))
                 except ValueError:
                     return jsonify({'success': False, 'error': 'Invalid end date format'}), 400
-            
+
             # Validate date logic
             if start_date and end_date and start_date >= end_date:
                 return jsonify({'success': False, 'error': 'End date must be after start date'}), 400
-            
+
             # Get PL matchday
             pl_matchday = data.get('pl_matchday')
             if not pl_matchday:
                 return jsonify({'success': False, 'error': 'Premier League matchday is required'}), 400
-            
-            # Create new round
+
+            # Create new round with explicit cycle_number
             new_round = Round(
                 round_number=round_number,
+                cycle_number=current_cycle,
                 pl_matchday=pl_matchday,
                 start_date=start_date,
                 end_date=end_date,
