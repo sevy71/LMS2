@@ -2557,24 +2557,62 @@ def process_round_results(round_id):
                             pick.player.status = 'eliminated'
                             eliminated_players.append(pick.player.name)
         
-        # Only mark round as completed if all fixtures have been processed
+        # Check fixture completion status
         total_fixtures = Fixture.query.filter_by(round_id=round_id).count()
         completed_fixtures = Fixture.query.filter_by(round_id=round_id, status='completed').count()
 
+        # Check current player status after processing these results
+        active_players_count = Player.query.filter_by(status='active').count()
+
+        # Count picks in this round and their outcomes
+        round_picks = Pick.query.filter_by(round_id=round_id).all()
+        picks_with_result = [p for p in round_picks if p.is_winner is not None]
+        picks_winners = [p for p in round_picks if p.is_winner == True]
+        picks_eliminated = [p for p in round_picks if p.is_eliminated == True]
+
+        # Diagnostic logging for rollover decision
+        app.logger.info(f"ROLLOVER CHECK for Round {round_obj.round_number} (ID={round_id}):")
+        app.logger.info(f"  Fixtures: {completed_fixtures}/{total_fixtures} completed")
+        app.logger.info(f"  Picks: {len(round_picks)} total, {len(picks_with_result)} processed, {len(picks_winners)} winners, {len(picks_eliminated)} eliminated")
+        app.logger.info(f"  Active players remaining: {active_players_count}")
+
         rollover_info = None
-        if completed_fixtures == total_fixtures:
+        early_termination = False
+
+        # EARLY TERMINATION: If zero active players remain, end the round immediately
+        # regardless of whether all fixtures have been played (remaining fixtures are irrelevant)
+        if active_players_count == 0 and len(picks_with_result) > 0:
+            app.logger.info(f"EARLY TERMINATION: All players eliminated after {completed_fixtures}/{total_fixtures} fixtures")
+            app.logger.info(f"  Remaining {total_fixtures - completed_fixtures} fixtures are now irrelevant - triggering rollover")
             round_obj.status = 'completed'
-            db.session.flush()  # Flush so rollover query sees the completed status
-            # If round fully completed, check if there is a single remaining active player and mark winner
+            early_termination = True
+            db.session.flush()
+
+            # Handle rollover scenario
+            rollover_info = handle_rollover_scenario()
+            if rollover_info:
+                reactivated_players = Player.query.filter_by(status='active').all()
+                surviving_players = [p.name for p in reactivated_players]
+                eliminated_players = []
+
+        # NORMAL COMPLETION: All fixtures finished
+        elif completed_fixtures == total_fixtures:
+            app.logger.info(f"NORMAL COMPLETION: All {total_fixtures} fixtures completed")
+            round_obj.status = 'completed'
+            db.session.flush()
+
+            # Check for single winner
             auto_detect_and_mark_winner()
 
             # Handle rollover scenario where all players were eliminated
             rollover_info = handle_rollover_scenario()
             if rollover_info:
-                # Update the surviving_players list to reflect the reactivated players
                 reactivated_players = Player.query.filter_by(status='active').all()
                 surviving_players = [p.name for p in reactivated_players]
-                eliminated_players = []  # All players advance in rollover
+                eliminated_players = []
+        else:
+            # Round still in progress
+            app.logger.info(f"ROUND IN PROGRESS: {total_fixtures - completed_fixtures} fixtures remaining, {active_players_count} active players")
 
         db.session.commit()
 
@@ -2601,14 +2639,21 @@ def process_round_results(round_id):
             'surviving_players': list(set(surviving_players)),
             'total_eliminated': len(set(eliminated_players)),
             'total_surviving': len(set(surviving_players)),
+            'fixtures_completed': completed_fixtures,
+            'fixtures_total': total_fixtures,
             'xlsx_generated': xlsx_file is not None,
             'xlsx_filename': xlsx_filename
         }
 
+        # Add early termination info
+        if early_termination:
+            response_data['early_termination'] = True
+            response_data['early_termination_reason'] = f'All players eliminated after {completed_fixtures}/{total_fixtures} fixtures. Remaining fixtures skipped.'
+
         # Add rollover information if it was handled
         if rollover_info:
             response_data['rollover_detected'] = True
-            response_data['rollover_message'] = f'Rollover scenario detected! All {rollover_info["players_reactivated"]} players have been reactivated for Round 1 of Cycle {rollover_info["next_cycle"]}.'
+            response_data['rollover_message'] = f'Rollover scenario detected! All {rollover_info["players_reactivated"]} players have been reactivated for Cycle {rollover_info["next_cycle"]}.'
             response_data['next_round_number'] = rollover_info['next_round_number']
             response_data['next_cycle'] = rollover_info['next_cycle']
 
