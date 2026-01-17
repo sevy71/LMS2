@@ -725,7 +725,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const roundSelect = document.getElementById('roundSelect');
         const activeOnly = document.getElementById('activeOnly');
-        const roundNumber = parseInt(roundSelect?.value || currentRoundNumber || 0, 10);
+        // FIX: round keys are strings like "C2-R11", NOT integers
+        const roundKey = roundSelect?.value || currentRoundNumber || '';
 
         // Filter active only if toggled
         const statusVal = p => String(p.status || '').toLowerCase().trim();
@@ -737,7 +738,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Players without a pick for the round sort after those with picks.
         const statusPriority = s => (s === 'active' ? 0 : s === 'winner' ? 1 : 2);
         const getTeamForRound = p => {
-            const pick = p.picks && p.picks[roundNumber];
+            const pick = p.picks && p.picks[roundKey];
             return pick && pick.team ? pick.team : null;
         };
         players.sort((a, b) => {
@@ -775,8 +776,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         <thead class="table-dark"><tr><th>Player</th><th>Pick</th><th>Status</th></tr></thead>
                         <tbody>
                             ${list.map(p => {
-                                const pickData = (p.picks && p.picks[roundNumber]) || null;
-                                const pickInfo = getPickInfo(pickData, roundNumber);
+                                const pickData = (p.picks && p.picks[roundKey]) || null;
+                                const pickInfo = getPickInfo(pickData, roundKey);
                                 const badge = `<span class=\"status-badge status-${p.status}\">${String(p.status||'').toUpperCase()}</span>`;
                                 return `<tr><td>${p.name}</td><td class=\"${pickInfo.class}\">${pickInfo.display}</td><td>${badge}</td></tr>`;
                             }).join('')}
@@ -1008,7 +1009,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const roundSelect = document.getElementById('roundSelect');
         if (roundSelect) {
             roundSelect.addEventListener('change', function() {
-                currentRoundNumber = parseInt(this.value, 10);
+                // FIX: round keys are strings like "C2-R11", NOT integers
+                currentRoundNumber = this.value;
                 renderByView();
             });
         }

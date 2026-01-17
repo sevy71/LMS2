@@ -7,7 +7,16 @@ import urllib.parse
 from functools import wraps
 from io import BytesIO
 
-load_dotenv()
+# --- Environment loading ---
+# Load .env.local if it exists (for local development with Postgres connection)
+# Railway production injects DATABASE_URL directly, so no .env file needed there
+_env_local_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
+if os.path.exists(_env_local_path):
+    load_dotenv(_env_local_path)
+    print(f"Loaded environment from .env.local")
+else:
+    # Fall back to standard .env if no .env.local
+    load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
@@ -33,16 +42,47 @@ def to_local(dt: datetime) -> datetime:
         return dt
 
 # --- Database configuration ---
-database_uri = os.environ.get('DATABASE_PUBLIC_URL') or os.environ.get('DATABASE_URL')
-if database_uri:
-    # SQLAlchemy prefers 'postgresql' over 'postgres'
-    app.config['SQLALCHEMY_DATABASE_URI'] = database_uri.replace('postgres://', 'postgresql://')
-    print("Using DATABASE_PUBLIC_URL" if os.environ.get('DATABASE_PUBLIC_URL') else "Using DATABASE_URL")
-else:
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///lms.db'
-    print("Using local SQLite database.")
+def _redact_db_uri(uri: str) -> str:
+    """Redact password from database URI for safe logging."""
+    if not uri:
+        return uri
+    try:
+        # Handle postgresql://user:password@host:port/db format
+        if '@' in uri and ':' in uri.split('@')[0]:
+            # Split into scheme://user:pass and @host/db
+            prefix, rest = uri.split('@', 1)
+            # Find the password portion (after last :// and before @)
+            scheme_end = prefix.find('://') + 3
+            user_pass = prefix[scheme_end:]
+            if ':' in user_pass:
+                user = user_pass.split(':')[0]
+                return f"{prefix[:scheme_end]}{user}:***@{rest}"
+        return uri
+    except Exception:
+        return "<URI redaction failed>"
 
-print(f"Database URI set to: {app.config['SQLALCHEMY_DATABASE_URI']}")
+# Determine which env var is providing the database URL
+_db_public = os.environ.get('DATABASE_PUBLIC_URL')
+_db_standard = os.environ.get('DATABASE_URL')
+if _db_public:
+    database_uri = _db_public
+    _db_source = 'DATABASE_PUBLIC_URL'
+elif _db_standard:
+    database_uri = _db_standard
+    _db_source = 'DATABASE_URL'
+else:
+    raise RuntimeError(
+        "DATABASE_URL not set — refusing to start. "
+        "For local development, create .env.local with DATABASE_PUBLIC_URL or DATABASE_URL. "
+        "On Railway, ensure the Postgres plugin is attached."
+    )
+
+# SQLAlchemy prefers 'postgresql' over 'postgres'
+app.config['SQLALCHEMY_DATABASE_URI'] = database_uri.replace('postgres://', 'postgresql://')
+
+# Log database configuration with redacted password
+print(f"[DB CONFIG] Source: {_db_source}")
+print(f"[DB CONFIG] URI: {_redact_db_uri(app.config['SQLALCHEMY_DATABASE_URI'])}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Import models and db
@@ -248,74 +288,114 @@ def _auto_run_migrations_if_enabled():
 
 # --- Fallback: Ensure required columns exist (for environments where migrations didn't run) ---
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError, DatabaseError
+
+def _startup_db_ping():
+    """Verify database connection at startup. Fail fast if connection fails."""
+    try:
+        # Simple connectivity test
+        db.session.execute(text("SELECT 1"))
+
+        # Log database version info
+        dialect_name = db.engine.dialect.name
+        if dialect_name == 'postgresql':
+            version = db.session.execute(text("SELECT version()")).scalar()
+            print(f"[DB PING] Connected to PostgreSQL: {version[:60]}...")
+        elif dialect_name == 'sqlite':
+            version = db.session.execute(text("SELECT sqlite_version()")).scalar()
+            print(f"[DB PING] Connected to SQLite: {version}")
+        else:
+            print(f"[DB PING] Connected to {dialect_name}")
+
+        db.session.rollback()  # Clean up the test transaction
+        return True
+    except (OperationalError, DatabaseError) as e:
+        # Connection or authentication failure - fail fast
+        raise RuntimeError(
+            f"DATABASE CONNECTION FAILED — refusing to start.\n"
+            f"URI: {_redact_db_uri(app.config['SQLALCHEMY_DATABASE_URI'])}\n"
+            f"Error: {e}"
+        ) from e
 
 def _ensure_minimum_schema():
+    """Ensure required columns exist (for environments where migrations didn't run).
+
+    NOTE: This function assumes it's called within an app_context AND that the
+    database connection has already been verified via _startup_db_ping().
+    Schema modification failures are warnings, but connection failures should
+    have been caught earlier.
+    """
     try:
-        with app.app_context():
-            engine = db.engine
-            insp = inspect(engine)
+        engine = db.engine
+        insp = inspect(engine)
 
-            # Rounds table columns
-            if insp.has_table('rounds'):
-                round_cols = {col['name'] for col in insp.get_columns('rounds')}
-                # (name, SQL type clause)
-                rounds_missing = []
-                if 'first_kickoff_at' not in round_cols:
-                    rounds_missing.append((
-                        'first_kickoff_at', 'TIMESTAMP NULL'
-                    ))
-                if 'special_measure' not in round_cols:
-                    rounds_missing.append((
-                        'special_measure', 'VARCHAR(50) NULL'
-                    ))
-                if 'special_note' not in round_cols:
-                    rounds_missing.append((
-                        'special_note', 'TEXT NULL'
-                    ))
-                if 'cycle_number' not in round_cols:
-                    rounds_missing.append((
-                        'cycle_number', 'INTEGER NULL'
-                    ))
-                for name, type_sql in rounds_missing:
-                    try:
-                        db.session.execute(text(f'ALTER TABLE rounds ADD COLUMN {name} {type_sql};'))
-                        app.logger.info(f'Added missing column rounds.{name}')
-                    except Exception as e:
-                        app.logger.warning(f'Could not add rounds.{name}: {e}')
+        # Rounds table columns
+        if insp.has_table('rounds'):
+            round_cols = {col['name'] for col in insp.get_columns('rounds')}
+            rounds_missing = []
+            if 'first_kickoff_at' not in round_cols:
+                rounds_missing.append(('first_kickoff_at', 'TIMESTAMP NULL'))
+            if 'special_measure' not in round_cols:
+                rounds_missing.append(('special_measure', 'VARCHAR(50) NULL'))
+            if 'special_note' not in round_cols:
+                rounds_missing.append(('special_note', 'TEXT NULL'))
+            if 'cycle_number' not in round_cols:
+                rounds_missing.append(('cycle_number', 'INTEGER NULL'))
 
-            # Picks table columns
-            if insp.has_table('picks'):
-                pick_cols = {col['name'] for col in insp.get_columns('picks')}
-                picks_missing = []
-                if 'auto_assigned' not in pick_cols:
-                    picks_missing.append(('auto_assigned', 'BOOLEAN NULL'))
-                if 'auto_reason' not in pick_cols:
-                    picks_missing.append(('auto_reason', 'VARCHAR(50) NULL'))
-                if 'postponed_event_id' not in pick_cols:
-                    picks_missing.append(('postponed_event_id', 'VARCHAR(50) NULL'))
-                if 'announcement_time' not in pick_cols:
-                    picks_missing.append(('announcement_time', 'TIMESTAMP NULL'))
-                for name, type_sql in picks_missing:
-                    try:
-                        db.session.execute(text(f'ALTER TABLE picks ADD COLUMN {name} {type_sql};'))
-                        app.logger.info(f'Added missing column picks.{name}')
-                    except Exception as e:
-                        app.logger.warning(f'Could not add picks.{name}: {e}')
-
-            # Create reminder_schedules table if missing (fallback for environments without migrations)
-            if not insp.has_table('reminder_schedules'):
+            for name, type_sql in rounds_missing:
                 try:
-                    ReminderSchedule.__table__.create(bind=engine)
-                    app.logger.info('Created missing table reminder_schedules')
+                    db.session.execute(text(f'ALTER TABLE rounds ADD COLUMN {name} {type_sql};'))
+                    app.logger.info(f'Added missing column rounds.{name}')
                 except Exception as e:
-                    app.logger.warning(f'Could not create reminder_schedules: {e}')
+                    app.logger.warning(f'Could not add rounds.{name}: {e}')
 
-            db.session.commit()
+        # Picks table columns
+        if insp.has_table('picks'):
+            pick_cols = {col['name'] for col in insp.get_columns('picks')}
+            picks_missing = []
+            if 'auto_assigned' not in pick_cols:
+                picks_missing.append(('auto_assigned', 'BOOLEAN NULL'))
+            if 'auto_reason' not in pick_cols:
+                picks_missing.append(('auto_reason', 'VARCHAR(50) NULL'))
+            if 'postponed_event_id' not in pick_cols:
+                picks_missing.append(('postponed_event_id', 'VARCHAR(50) NULL'))
+            if 'announcement_time' not in pick_cols:
+                picks_missing.append(('announcement_time', 'TIMESTAMP NULL'))
+
+            for name, type_sql in picks_missing:
+                try:
+                    db.session.execute(text(f'ALTER TABLE picks ADD COLUMN {name} {type_sql};'))
+                    app.logger.info(f'Added missing column picks.{name}')
+                except Exception as e:
+                    app.logger.warning(f'Could not add picks.{name}: {e}')
+
+        # Create reminder_schedules table if missing
+        if not insp.has_table('reminder_schedules'):
+            try:
+                ReminderSchedule.__table__.create(bind=engine)
+                app.logger.info('Created missing table reminder_schedules')
+            except Exception as e:
+                app.logger.warning(f'Could not create reminder_schedules: {e}')
+
+        db.session.commit()
+
+    except (OperationalError, DatabaseError) as e:
+        # Connection failures during schema ensure should not be swallowed
+        db.session.rollback()
+        raise RuntimeError(
+            f"DATABASE ERROR during schema ensure — refusing to start.\n"
+            f"Error: {e}"
+        ) from e
     except Exception as e:
         db.session.rollback()
         app.logger.warning(f'Schema ensure fallback encountered an error: {e}')
 
-_ensure_minimum_schema()
+
+# --- Startup database verification (fail-fast) ---
+# Must be inside app_context and AFTER db.init_app(app)
+with app.app_context():
+    _startup_db_ping()       # Verify connection first - raises RuntimeError on failure
+    _ensure_minimum_schema() # Then ensure schema - connection errors will also raise
 
 # Admin authentication
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')  # Change this!
@@ -581,17 +661,29 @@ def get_picks_grid_data():
             }
 
         # Prepare rounds data with cycle information
+        # Compute within-cycle round number for display (R1, R2, R3... per cycle)
+        # round_number in DB is global sequence; we need cycle-relative position
         rounds_data = []
+        cycle_round_counters = {}  # Track position within each cycle
         for r in rounds:
             cycle_num = r.cycle_number or 1
-            # Create a unique key that includes cycle info
+            # Increment counter for this cycle to get within-cycle position
+            if cycle_num not in cycle_round_counters:
+                cycle_round_counters[cycle_num] = 0
+            cycle_round_counters[cycle_num] += 1
+            cycle_round_number = cycle_round_counters[cycle_num]
+
+            # Create a unique key that includes cycle info (for data lookups)
             round_key = f"C{cycle_num}-R{r.round_number}"
+            # Display label uses within-cycle number (e.g., R3 instead of R11)
+            display_label = f"R{cycle_round_number}" if cycle_filter != 'all' else f"C{cycle_num}-R{cycle_round_number}"
             rounds_data.append({
                 'id': r.id,
                 'round_number': r.round_number,
                 'cycle_number': cycle_num,
+                'cycle_round_number': cycle_round_number,  # Within-cycle position for display
                 'round_key': round_key,
-                'label': f"R{r.round_number}" if cycle_filter != 'all' else round_key
+                'label': display_label
             })
 
         # Prepare player data
