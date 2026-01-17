@@ -2564,6 +2564,7 @@ def process_round_results(round_id):
         rollover_info = None
         if completed_fixtures == total_fixtures:
             round_obj.status = 'completed'
+            db.session.flush()  # Flush so rollover query sees the completed status
             # If round fully completed, check if there is a single remaining active player and mark winner
             auto_detect_and_mark_winner()
 
