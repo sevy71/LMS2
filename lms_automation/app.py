@@ -434,14 +434,19 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
         max_round = db.session.query(db.func.max(Round.round_number)).scalar() or 0
         next_round_number = max_round + 1
 
-        # IDEMPOTENCY CHECK: Does a round with this (round_number, cycle_number) already exist?
+        # Log the parameters for debugging
+        app.logger.info(f"CREATE_NEXT_ROUND_AFTER_ROLLOVER: reference_round.id={reference_round.id}, "
+                        f"reference_round.cycle_number={reference_round.cycle_number}, "
+                        f"next_cycle={next_cycle}, next_round_number={next_round_number}")
+
+        # IDEMPOTENCY CHECK 1: Does a round with this (round_number, cycle_number) already exist?
         existing_round = Round.query.filter_by(
             round_number=next_round_number,
             cycle_number=next_cycle
         ).first()
 
         if existing_round:
-            app.logger.info(f"NEXT ROUND EXISTS: id={existing_round.id}, round={existing_round.round_number}, cycle={existing_round.cycle_number}")
+            app.logger.info(f"NEXT ROUND EXISTS (exact match): id={existing_round.id}, round={existing_round.round_number}, cycle={existing_round.cycle_number}")
             return {
                 'created': False,
                 'round_id': existing_round.id,
@@ -452,6 +457,63 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
                 'fixtures_loaded': len(existing_round.fixtures) if existing_round.fixtures else 0,
                 'season_break': existing_round.special_measure == 'SEASON_BREAK',
                 'message': f'Round {existing_round.round_number} already exists (Cycle {existing_round.cycle_number})'
+            }
+
+        # IDEMPOTENCY CHECK 2: Is there ANY active round with ID > reference_round?
+        # This catches rounds created with wrong cycle_number before rollover ran
+        existing_active_round = Round.query.filter(
+            Round.id > reference_round.id,
+            Round.status.in_(['active', 'pending']),
+            or_(Round.special_measure.is_(None), Round.special_measure.notin_(['EARLY_TERMINATED']))
+        ).order_by(Round.id.asc()).first()
+
+        if existing_active_round:
+            # Found a round created after reference - fix its cycle_number if wrong
+            if existing_active_round.cycle_number != next_cycle:
+                app.logger.warning(f"FIXING CYCLE NUMBER: Round {existing_active_round.round_number} (ID={existing_active_round.id}) "
+                                   f"has cycle_number={existing_active_round.cycle_number}, should be {next_cycle}")
+                existing_active_round.cycle_number = next_cycle
+                db.session.add(existing_active_round)
+                db.session.commit()
+                app.logger.info(f"CYCLE NUMBER FIXED: Round {existing_active_round.round_number} now has cycle_number={next_cycle}")
+
+            return {
+                'created': False,
+                'round_id': existing_active_round.id,
+                'round_number': existing_active_round.round_number,
+                'cycle_number': existing_active_round.cycle_number,
+                'status': existing_active_round.status,
+                'special_measure': existing_active_round.special_measure,
+                'fixtures_loaded': len(existing_active_round.fixtures) if existing_active_round.fixtures else 0,
+                'season_break': existing_active_round.special_measure == 'SEASON_BREAK',
+                'message': f'Round {existing_active_round.round_number} already exists (cycle fixed to {next_cycle})'
+            }
+
+        # IDEMPOTENCY CHECK 3: Check for any active round in the same kickoff window
+        # This prevents duplicate rounds being created for the same matchday
+        existing_any_active = Round.query.filter(
+            Round.status == 'active',
+            or_(Round.special_measure.is_(None), Round.special_measure.notin_(['EARLY_TERMINATED', 'SEASON_BREAK']))
+        ).first()
+        if existing_any_active:
+            app.logger.warning(f"SKIPPING ROUND CREATION: Active round already exists - "
+                               f"Round {existing_any_active.round_number} (ID={existing_any_active.id}, Cycle={existing_any_active.cycle_number})")
+            # Fix cycle if needed
+            if existing_any_active.cycle_number != next_cycle:
+                app.logger.warning(f"FIXING CYCLE NUMBER on active round: {existing_any_active.cycle_number} -> {next_cycle}")
+                existing_any_active.cycle_number = next_cycle
+                db.session.add(existing_any_active)
+                db.session.commit()
+            return {
+                'created': False,
+                'round_id': existing_any_active.id,
+                'round_number': existing_any_active.round_number,
+                'cycle_number': existing_any_active.cycle_number,
+                'status': existing_any_active.status,
+                'special_measure': existing_any_active.special_measure,
+                'fixtures_loaded': len(existing_any_active.fixtures) if existing_any_active.fixtures else 0,
+                'season_break': existing_any_active.special_measure == 'SEASON_BREAK',
+                'message': f'Active round {existing_any_active.round_number} already exists (Cycle {existing_any_active.cycle_number})'
             }
 
         # Check fixture availability to detect season break
@@ -536,6 +598,14 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
                 }
 
         # Create the new round
+        app.logger.info("=" * 60)
+        app.logger.info(f">>> CREATING NEW ROUND AFTER ROLLOVER")
+        app.logger.info(f"    reference_round.id={reference_round.id}")
+        app.logger.info(f"    reference_round.cycle_number={reference_round.cycle_number}")
+        app.logger.info(f"    computed next_cycle={next_cycle}")
+        app.logger.info(f"    next_round_number={next_round_number}")
+        app.logger.info(f"    next_matchday={next_matchday}")
+
         new_round = Round(
             round_number=next_round_number,
             cycle_number=next_cycle,
@@ -546,6 +616,9 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
         )
         db.session.add(new_round)
         db.session.flush()  # Get the ID
+
+        app.logger.info(f"    ROUND CREATED: id={new_round.id}, cycle_number_written={new_round.cycle_number}")
+        app.logger.info("=" * 60)
 
         # Load fixtures from API
         fixtures_loaded = 0
@@ -1553,9 +1626,37 @@ def handle_rounds():
         try:
             data = request.get_json()
 
-            # Auto-detect current cycle (max cycle_number in DB, treat None as 1)
-            max_cycle_row = db.session.query(db.func.max(Round.cycle_number)).scalar()
-            current_cycle = max_cycle_row if max_cycle_row is not None else 1
+            # ─────────────────────────────────────────────────────────────────────
+            # CYCLE NUMBER DETECTION (rollover-aware)
+            # ─────────────────────────────────────────────────────────────────────
+            # Check if rollover occurred since last completed round
+            # by looking at the last completed round's special_measure
+            last_completed = Round.query.filter_by(status='completed').order_by(Round.id.desc()).first()
+
+            # Detect rollover state: if last completed round has EARLY_TERMINATED,
+            # the next round should be in a new cycle
+            rollover_occurred = False
+            if last_completed and last_completed.special_measure == 'EARLY_TERMINATED':
+                # Check if there's already an active round in the new cycle
+                # If not, we need to increment the cycle
+                existing_active = Round.query.filter(
+                    Round.status.in_(['active', 'pending']),
+                    Round.id > last_completed.id
+                ).first()
+                if not existing_active:
+                    rollover_occurred = True
+                    app.logger.info(f"POST /api/rounds: Detected rollover (last completed round {last_completed.round_number} is EARLY_TERMINATED)")
+
+            # Determine current_cycle based on rollover state
+            if rollover_occurred:
+                # Rollover happened - new round should be in next cycle
+                current_cycle = (last_completed.cycle_number or 1) + 1
+                app.logger.info(f"POST /api/rounds: Using next_cycle={current_cycle} after rollover")
+            else:
+                # No rollover - use max cycle_number in DB
+                max_cycle_row = db.session.query(db.func.max(Round.cycle_number)).scalar()
+                current_cycle = max_cycle_row if max_cycle_row is not None else 1
+                app.logger.info(f"POST /api/rounds: Using current_cycle={current_cycle} (no rollover detected)")
 
             # Auto-assign round_number if not provided
             round_number = data.get('round_number')
@@ -1568,6 +1669,21 @@ def handle_rounds():
             existing_round = Round.query.filter_by(round_number=round_number, cycle_number=current_cycle).first()
             if existing_round:
                 return jsonify({'success': False, 'error': f'Round {round_number} already exists in Cycle {current_cycle}'}), 400
+
+            # ─────────────────────────────────────────────────────────────────────
+            # IDEMPOTENCY GUARD: Check if an active round already exists
+            # ─────────────────────────────────────────────────────────────────────
+            # Prevent creating multiple active rounds - if one already exists, block
+            existing_active = Round.query.filter(
+                Round.status == 'active',
+                or_(Round.special_measure.is_(None), Round.special_measure.notin_(['EARLY_TERMINATED', 'SEASON_BREAK']))
+            ).first()
+            if existing_active:
+                return jsonify({
+                    'success': False,
+                    'error': f'An active round already exists: Round {existing_active.round_number} (Cycle {existing_active.cycle_number}). '
+                             f'Complete or deactivate it before creating a new round.'
+                }), 400
 
             # Parse dates if provided
             start_date = None
