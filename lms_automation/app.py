@@ -1069,20 +1069,31 @@ def get_picks_grid_data():
         # Get filter parameter - default to current cycle
         cycle_filter = request.args.get('cycle', 'current')
 
+        # Get current cycle (the highest cycle number with an active/pending round, or latest completed)
+        current_round = Round.query.filter(Round.status.in_(['active', 'pending'])).order_by(Round.id.desc()).first()
+        if not current_round:
+            current_round = Round.query.order_by(Round.id.desc()).first()
+        current_cycle = current_round.cycle_number or 1 if current_round else 1
+
         # Determine which cycles to show
         if cycle_filter == 'all':
             rounds = Round.query.order_by(Round.cycle_number, Round.round_number).all()
-        else:
-            # Get current cycle (the highest cycle number with an active/pending round, or latest completed)
-            current_round = Round.query.filter(Round.status.in_(['active', 'pending'])).order_by(Round.id.desc()).first()
-            if not current_round:
-                current_round = Round.query.order_by(Round.id.desc()).first()
-
+        elif cycle_filter == 'current':
             if current_round:
-                current_cycle = current_round.cycle_number or 1
                 rounds = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number).all()
             else:
                 rounds = []
+        else:
+            # Explicit cycle number (e.g., "3")
+            try:
+                selected_cycle = int(cycle_filter)
+                rounds = Round.query.filter_by(cycle_number=selected_cycle).order_by(Round.round_number).all()
+            except ValueError:
+                # Invalid value, fall back to current
+                if current_round:
+                    rounds = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number).all()
+                else:
+                    rounds = []
 
         players = Player.query.order_by(Player.name).all()
         picks = Pick.query.all()

@@ -15,8 +15,12 @@
 
     <div class="card">
         <div class="card-header d-flex flex-column gap-2">
-            <div class="d-flex align-items-center gap-2">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
                 <h5 class="card-title mb-0">All Player Picks</h5>
+                <div class="d-flex align-items-center gap-2">
+                    <label for="cycleSelect" class="form-label mb-0 small">Cycle:</label>
+                    <select id="cycleSelect" class="form-select form-select-sm" style="width:auto;"></select>
+                </div>
                 <div class="btn-group ms-2" role="group" aria-label="View mode">
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="viewPlayer">Player View</button>
                     <button type="button" class="btn btn-sm btn-outline-secondary" id="viewRound">Round View</button>
@@ -60,8 +64,9 @@
 
             <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2" id="roundControls" style="display:none;">
                 <div class="d-flex align-items-center gap-2">
-                    <label for="roundSelect" class="form-label mb-0">Round:</label>
+                    <label for="roundSelect" class="form-label mb-0 small">Round:</label>
                     <select id="roundSelect" class="form-select form-select-sm" style="width:auto;"></select>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="showAllRoundsBtn" title="Show all rounds in grid">All Rounds</button>
                 </div>
                 <div class="d-flex align-items-center gap-3">
                     <div class="form-check form-switch">
@@ -513,8 +518,11 @@ function getTeamAbbreviation(teamName) {
 let gridData = null;
 let currentSort = 'progress';
 let currentView = 'player'; // 'player' | 'round'
-let currentRoundNumber = null;
+let currentRoundKey = null; // Round key for Round View (e.g., "C2-R3")
+let selectedCycle = 'current'; // Cycle filter value
 let showAllMobileRounds = false; // player view compaction toggle
+let playerViewRoundFilter = null; // When set, Player View shows only this round column
+let eventListenersInitialized = false; // Prevent duplicate event bindings
 
 document.addEventListener('DOMContentLoaded', function() {
     const gridContainer = document.getElementById('grid-container');
@@ -526,69 +534,101 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Load data
-    fetch('/api/picks-grid-data?cycle=current')
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                gridData = data;
-                // Initialize rounds selector for round view
-                const rounds = data.rounds || [];
-                const roundSelect = document.getElementById('roundSelect');
-                if (rounds.length > 0 && roundSelect) {
-                    roundSelect.innerHTML = rounds.map(r => `<option value="${r.round_key}">${r.label}</option>`).join('');
-                    // Select the latest round
-                    if (rounds.length > 0) {
-                        const latestRound = rounds[rounds.length - 1];
-                        currentRoundNumber = latestRound.round_key;
-                        roundSelect.value = currentRoundNumber;
+    loadGridData('current');
+
+    function loadGridData(cycle) {
+        console.log('[Picks Grid] Loading data for cycle:', cycle);
+        fetch(`/api/picks-grid-data?cycle=${cycle}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    gridData = data;
+                    selectedCycle = cycle;
+
+                    // Initialize cycle selector
+                    initCycleSelector(data);
+
+                    // Initialize round selector for Round View
+                    initRoundSelector(data);
+
+                    renderByView();
+
+                    // Only set up event listeners once
+                    if (!eventListenersInitialized) {
+                        setupEventListeners();
+                        eventListenersInitialized = true;
                     }
+                } else {
+                    gridContainer.innerHTML = `<div class="alert alert-danger">Error loading data: ${data.error}</div>`;
                 }
+            })
+            .catch(error => {
+                console.error('Error fetching picks grid data:', error);
+                gridContainer.innerHTML = '<div class="alert alert-danger">Could not fetch data from the server.</div>';
+            });
+    }
 
-                // Add cycle selector if multiple cycles exist
-                addCycleSelector(data);
+    function initCycleSelector(data) {
+        const cycleSelect = document.getElementById('cycleSelect');
+        if (!cycleSelect) return;
 
-                renderByView();
-                setupEventListeners();
-            } else {
-                gridContainer.innerHTML = `<div class="alert alert-danger">Error loading data: ${data.error}</div>`;
-            }
-        })
-        .catch(error => {
-            console.error('Error fetching picks grid data:', error);
-            gridContainer.innerHTML = '<div class="alert alert-danger">Could not fetch data from the server.</div>';
-        });
+        const cycles = data.available_cycles || [];
+        const currentCycle = data.current_cycle || 1;
 
-    function addCycleSelector(data) {
-        // Add cycle filter dropdown to the controls if there are multiple cycles
-        if (!data.available_cycles || data.available_cycles.length <= 1) return;
+        let options = cycles.map(c => {
+            const isCurrent = c === currentCycle;
+            const label = `Cycle ${c}${isCurrent ? ' (Current)' : ''}`;
+            const selected = (selectedCycle === 'current' && isCurrent) || selectedCycle === String(c) ? 'selected' : '';
+            return `<option value="${c}" ${selected}>${label}</option>`;
+        }).join('');
 
-        const controlsArea = document.querySelector('.card-header .d-flex.flex-wrap.gap-1');
-        if (!controlsArea) return;
+        cycleSelect.innerHTML = options;
 
-        const cycleSelectHtml = `
-            <select id="cycleFilter" class="form-select form-select-sm" style="width: auto; display: inline-block;">
-                <option value="current">Current Cycle (${data.current_cycle})</option>
-                <option value="all">All Cycles</option>
-                ${data.available_cycles.map(c => `<option value="${c}">Cycle ${c}</option>`).join('')}
-            </select>
-        `;
+        // Set initial value
+        if (selectedCycle === 'current') {
+            cycleSelect.value = String(currentCycle);
+        }
+    }
 
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = cycleSelectHtml;
-        controlsArea.insertBefore(tempDiv.firstElementChild, controlsArea.firstChild);
+    function initRoundSelector(data) {
+        const rounds = data.rounds || [];
+        const roundSelect = document.getElementById('roundSelect');
+        if (!roundSelect) return;
 
-        // Add change listener
-        document.getElementById('cycleFilter').addEventListener('change', function(e) {
-            const cycle = e.target.value;
-            fetch(`/api/picks-grid-data?cycle=${cycle}`)
-                .then(response => response.json())
-                .then(newData => {
-                    if (newData.success) {
-                        gridData = newData;
-                        renderByView();
-                    }
-                });
-        });
+        if (rounds.length === 0) {
+            roundSelect.innerHTML = '<option value="">No rounds</option>';
+            currentRoundKey = null;
+            return;
+        }
+
+        roundSelect.innerHTML = rounds.map(r => `<option value="${r.round_key}">${r.label}</option>`).join('');
+
+        // Default to latest round
+        const latestRound = rounds[rounds.length - 1];
+        currentRoundKey = latestRound.round_key;
+        roundSelect.value = currentRoundKey;
+    }
+
+    function onCycleChange(cycle) {
+        console.log('[Picks Grid] Cycle changed to:', cycle);
+        playerViewRoundFilter = null; // Reset single-round filter when cycle changes
+
+        fetch(`/api/picks-grid-data?cycle=${cycle}`)
+            .then(response => response.json())
+            .then(newData => {
+                if (newData.success) {
+                    gridData = newData;
+                    selectedCycle = cycle;
+
+                    // Re-init round selector with new rounds for this cycle
+                    initRoundSelector(newData);
+
+                    renderByView();
+                } else {
+                    console.error('[Picks Grid] Failed to load cycle data:', newData.error);
+                }
+            })
+            .catch(err => console.error('[Picks Grid] Error loading cycle:', err));
     }
 
     function sortPlayersForProgress(players) {
@@ -613,6 +653,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function renderByView() {
         if (!gridData) return;
+
+        const rounds = gridData.rounds || [];
+        if (rounds.length === 0) {
+            gridContainer.innerHTML = '<div class="alert alert-info">No rounds found for this cycle.</div>';
+            document.getElementById('roundControls').style.display = 'none';
+            return;
+        }
+
         if (currentView === 'round') {
             document.getElementById('columnControls').style.display = 'none';
             document.getElementById('roundControls').style.display = 'flex';
@@ -625,7 +673,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const tgl = document.getElementById('toggleMobileRounds');
             if (tgl) tgl.style.display = 'none';
         } else {
-            document.getElementById('roundControls').style.display = 'none';
+            // Player View: show round controls so user can filter to a single round
+            document.getElementById('roundControls').style.display = 'flex';
             const container = document.getElementById('grid-container');
             if (container) container.classList.remove('round-view');
             renderGrid(gridData, currentSort);
@@ -704,9 +753,17 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
-        // Determine which round columns to render (compact on mobile)
+        // Determine which round columns to render
+        // Player View: if a round is selected, show only that round column
+        // Otherwise, show all rounds (or compact on mobile)
         const compactMobile = isMobile && !showAllMobileRounds;
-        const roundsToRender = compactMobile ? rounds.slice(-2) : rounds;
+        let roundsToRender;
+        if (playerViewRoundFilter) {
+            // Filter to just the selected round
+            roundsToRender = rounds.filter(r => r.round_key === playerViewRoundFilter);
+        } else {
+            roundsToRender = compactMobile ? rounds.slice(-2) : rounds;
+        }
 
         // Create spreadsheet grid structure
         let gridHtml = '<div class="spreadsheet-grid" style="grid-template-columns: 180px 100px 1fr;">';
@@ -855,8 +912,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const roundSelect = document.getElementById('roundSelect');
         const activeOnly = document.getElementById('activeOnly');
-        // FIX: round keys are strings like "C2-R11", NOT integers
-        const roundKey = roundSelect?.value || currentRoundNumber || '';
+        // Round keys are strings like "C2-R11"
+        const roundKey = roundSelect?.value || currentRoundKey || '';
 
         // Filter active only if toggled
         const statusVal = p => String(p.status || '').toLowerCase().trim();
@@ -1084,9 +1141,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
     function setupEventListeners() {
+        // Cycle selector
+        const cycleSelect = document.getElementById('cycleSelect');
+        if (cycleSelect) {
+            cycleSelect.addEventListener('change', function() {
+                const cycle = this.value;
+                console.log('[Picks Grid] Cycle selector changed to:', cycle);
+                onCycleChange(cycle);
+            });
+        }
+
         // View toggles
         document.getElementById('viewPlayer').addEventListener('click', function() {
             currentView = 'player';
+            // When switching to Player View, clear single-round filter to show all rounds
+            playerViewRoundFilter = null;
+            updateShowAllRoundsButton();
             renderByView();
         });
         document.getElementById('viewRound').addEventListener('click', function() {
@@ -1146,15 +1216,36 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
-        // Round controls
+        // Round selector - behavior differs by view
         const roundSelect = document.getElementById('roundSelect');
         if (roundSelect) {
             roundSelect.addEventListener('change', function() {
-                // FIX: round keys are strings like "C2-R11", NOT integers
-                currentRoundNumber = this.value;
+                const roundKey = this.value;
+                console.log('[Picks Grid] Round selector changed to:', roundKey);
+
+                if (currentView === 'round') {
+                    // Round View: use for filtering the table
+                    currentRoundKey = roundKey;
+                } else {
+                    // Player View: filter grid to show only this round column
+                    playerViewRoundFilter = roundKey;
+                    updateShowAllRoundsButton();
+                }
                 renderByView();
             });
         }
+
+        // "All Rounds" button - clears single-round filter in Player View
+        const showAllRoundsBtn = document.getElementById('showAllRoundsBtn');
+        if (showAllRoundsBtn) {
+            showAllRoundsBtn.addEventListener('click', function() {
+                console.log('[Picks Grid] Showing all rounds');
+                playerViewRoundFilter = null;
+                updateShowAllRoundsButton();
+                renderByView();
+            });
+        }
+
         const activeOnly = document.getElementById('activeOnly');
         if (activeOnly) {
             activeOnly.addEventListener('change', function() {
@@ -1168,26 +1259,36 @@ document.addEventListener('DOMContentLoaded', function() {
             controls.style.display = controls.style.display === 'none' ? 'block' : 'none';
         });
 
-        // Export buttons
+        // Export buttons - respect current cycle selection
         const exportGridBtn = document.getElementById('exportGrid');
         if (exportGridBtn) {
             exportGridBtn.addEventListener('click', function() {
-                // Get current cycle filter value
-                const cycleFilter = document.getElementById('cycleFilter');
-                const cycle = cycleFilter ? cycleFilter.value : 'current';
+                const cycleSelect = document.getElementById('cycleSelect');
+                const cycle = cycleSelect ? cycleSelect.value : 'current';
                 window.location.href = `/api/export/picks-grid?cycle=${cycle}`;
             });
         }
         const exportGridExcelBtn = document.getElementById('exportGridExcel');
         if (exportGridExcelBtn) {
             exportGridExcelBtn.addEventListener('click', function() {
-                // Get current cycle filter value
-                const cycleFilter = document.getElementById('cycleFilter');
-                const cycle = cycleFilter ? cycleFilter.value : 'current';
+                const cycleSelect = document.getElementById('cycleSelect');
+                const cycle = cycleSelect ? cycleSelect.value : 'current';
                 window.location.href = `/api/export/picks-grid-xlsx?cycle=${cycle}`;
             });
         }
-        // Round export buttons removed to declutter the page
+    }
+
+    function updateShowAllRoundsButton() {
+        const btn = document.getElementById('showAllRoundsBtn');
+        if (!btn) return;
+
+        if (playerViewRoundFilter) {
+            btn.classList.remove('btn-outline-secondary');
+            btn.classList.add('btn-secondary');
+        } else {
+            btn.classList.remove('btn-secondary');
+            btn.classList.add('btn-outline-secondary');
+        }
     }
 
     function updateSortButtons(activeButton) {
