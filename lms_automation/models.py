@@ -7,13 +7,16 @@ db = SQLAlchemy()
 
 class Player(db.Model):
     __tablename__ = 'players'
-    
+
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     whatsapp_number = db.Column(db.String(20), nullable=True)
     status = db.Column(db.String(20), default='active')  # active, eliminated, winner
     unreachable = db.Column(db.Boolean, default=False)
-    
+
+    # Admin bookkeeping: last known date player paid entry fee (informational only)
+    last_entry_fee_paid_at = db.Column(db.Date, nullable=True)
+
     picks = db.relationship('Pick', backref='player', lazy=True)
     
     def __repr__(self):

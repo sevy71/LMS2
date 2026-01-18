@@ -794,6 +794,20 @@ def _ensure_minimum_schema():
                 except Exception as e:
                     app.logger.warning(f'Could not add picks.{name}: {e}')
 
+        # Players table columns
+        if insp.has_table('players'):
+            player_cols = {col['name'] for col in insp.get_columns('players')}
+            players_missing = []
+            if 'last_entry_fee_paid_at' not in player_cols:
+                players_missing.append(('last_entry_fee_paid_at', 'DATE NULL'))
+
+            for name, type_sql in players_missing:
+                try:
+                    db.session.execute(text(f'ALTER TABLE players ADD COLUMN {name} {type_sql};'))
+                    app.logger.info(f'Added missing column players.{name}')
+                except Exception as e:
+                    app.logger.warning(f'Could not add players.{name}: {e}')
+
         # Create reminder_schedules table if missing
         if not insp.has_table('reminder_schedules'):
             try:
@@ -1133,8 +1147,10 @@ def get_picks_grid_data():
                     player_picks[round_key] = None
 
             players_data.append({
+                'id': player.id,
                 'name': player.name,
                 'status': player.status,
+                'last_entry_fee_paid_at': player.last_entry_fee_paid_at.isoformat() if player.last_entry_fee_paid_at else None,
                 'picks': player_picks
             })
 
@@ -1153,6 +1169,49 @@ def get_picks_grid_data():
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/players/<int:player_id>/payment-date', methods=['POST'])
+@admin_required
+def update_player_payment_date(player_id):
+    """Update the last entry fee paid date for a player (admin bookkeeping only)."""
+    try:
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'error': 'Player not found'}), 404
+
+        data = request.get_json()
+        if data is None:
+            return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
+
+        date_value = data.get('last_entry_fee_paid_at')
+
+        if date_value is None or date_value == '':
+            # Clear the date
+            player.last_entry_fee_paid_at = None
+            app.logger.info(f'Payment date cleared for player {player.name} (ID: {player_id})')
+        else:
+            # Parse and set the date
+            from datetime import datetime
+            try:
+                parsed_date = datetime.strptime(date_value, '%Y-%m-%d').date()
+                player.last_entry_fee_paid_at = parsed_date
+                app.logger.info(f'Payment date set to {parsed_date} for player {player.name} (ID: {player_id})')
+            except ValueError:
+                return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'player_id': player_id,
+            'last_entry_fee_paid_at': player.last_entry_fee_paid_at.isoformat() if player.last_entry_fee_paid_at else None
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'Error updating payment date for player {player_id}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/')
 def index():
