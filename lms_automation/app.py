@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import urllib.parse
 from functools import wraps
 from io import BytesIO
+from sqlalchemy import or_
 
 # --- Environment loading ---
 # Load .env.local if it exists (for local development with Postgres connection)
@@ -155,10 +156,14 @@ def get_current_active_round():
     Side effects:
         - Logs warning if multiple active rounds exist
         - Auto-deactivates (marks completed) any active rounds from older cycles
+        - Ignores rounds with special_measure='EARLY_TERMINATED'
     """
     try:
-        # Find all active rounds
-        active_rounds = Round.query.filter_by(status='active').order_by(Round.cycle_number.desc(), Round.id.desc()).all()
+        # Find all active rounds, excluding EARLY_TERMINATED ones
+        active_rounds = Round.query.filter(
+            Round.status == 'active',
+            or_(Round.special_measure.is_(None), Round.special_measure != 'EARLY_TERMINATED')
+        ).order_by(Round.cycle_number.desc(), Round.id.desc()).all()
 
         if not active_rounds:
             return None
@@ -203,67 +208,83 @@ def auto_detect_and_mark_winner():
         app.logger.warning(f"Winner auto-detection failed: {e}")
         return None
 
-def handle_rollover_scenario():
+def handle_rollover_scenario(reference_round=None):
     """Handle rollover scenario where all remaining players lost in the same round.
-    When this happens, all eliminated players from the current round should be reactivated.
-    Also updates the next round to be Round 1 of the next cycle.
+
+    BUSINESS RULE: When zero active players remain, ALL eliminated players must be
+    reactivated for a new cycle. This includes all players eliminated throughout
+    the entire cycle, not just those in the final round.
+
+    Args:
+        reference_round: Optional Round object to use as reference for cycle calculation.
+                        If None, uses the highest-ID active or completed round.
+                        This allows rollover even if no round is marked 'completed'.
+
     Returns a dict with rollover info if handled, None otherwise.
     """
     try:
         # Check if we have zero active players
         active_count = Player.query.filter_by(status='active').count()
+        eliminated_count = Player.query.filter_by(status='eliminated').count()
 
-        if active_count == 0:
-            # Get the most recently completed round
-            last_completed_round = Round.query.filter_by(status='completed').order_by(Round.id.desc()).first()
+        app.logger.info(f"ROLLOVER CHECK: active={active_count}, eliminated={eliminated_count}")
 
-            if last_completed_round:
-                # Find all players who had picks in this round (they all lost and need to advance)
-                players_in_round = db.session.query(Player).join(Pick).filter(
-                    Pick.round_id == last_completed_round.id,
-                    Player.status == 'eliminated'
-                ).distinct().all()
+        if active_count == 0 and eliminated_count > 0:
+            # Determine reference round for cycle calculation
+            # Priority: explicit parameter > highest active round > highest completed round
+            if reference_round is None:
+                reference_round = Round.query.filter_by(status='active').order_by(Round.id.desc()).first()
+            if reference_round is None:
+                reference_round = Round.query.filter_by(status='completed').order_by(Round.id.desc()).first()
 
-                if players_in_round:
-                    app.logger.info(f"ROLLOVER DETECTED: All {len(players_in_round)} players lost in round {last_completed_round.round_number}")
+            if not reference_round:
+                app.logger.warning("ROLLOVER BLOCKED: No active or completed round found to use as reference")
+                return None
 
-                    # Reactivate all players who participated in the round
-                    for player in players_in_round:
-                        player.status = 'active'
-                        db.session.add(player)
+            app.logger.info(f"ROLLOVER CHECK: Using Round {reference_round.round_number} (ID={reference_round.id}, status={reference_round.status}) as reference")
 
-                    # Calculate the next cycle number
-                    current_cycle = last_completed_round.cycle_number or 1
-                    next_cycle = current_cycle + 1
+            # Reactivate ALL eliminated players for the new cycle
+            all_eliminated_players = Player.query.filter_by(status='eliminated').all()
 
-                    # Update ALL non-completed rounds to be part of the next cycle
-                    # This handles both newly created rounds and rounds created before the rollover
-                    future_rounds = Round.query.filter(
-                        Round.status.in_(['pending', 'active']),
-                        Round.id > last_completed_round.id
-                    ).all()
+            if all_eliminated_players:
+                app.logger.info(f"ROLLOVER TRIGGERED: Reactivating ALL {len(all_eliminated_players)} eliminated players for new cycle")
 
-                    if future_rounds:
-                        # Update cycle_number for future rounds, but KEEP their round_number (global sequence)
-                        for round_obj in future_rounds:
-                            round_obj.cycle_number = next_cycle
-                            db.session.add(round_obj)
-                            app.logger.info(f"ROLLOVER: Updated round {round_obj.id} (Round {round_obj.round_number}) to Cycle {next_cycle}")
-                    else:
-                        app.logger.warning("ROLLOVER: No future rounds found to update")
+                for player in all_eliminated_players:
+                    player.status = 'active'
+                    db.session.add(player)
 
-                    db.session.commit()
+                # Calculate the next cycle number
+                current_cycle = reference_round.cycle_number or 1
+                next_cycle = current_cycle + 1
 
-                    # Determine the next round number in the sequence
-                    next_round_num = future_rounds[0].round_number if future_rounds else (last_completed_round.round_number + 1)
-                    app.logger.info(f"ROLLOVER HANDLED: Reactivated {len(players_in_round)} players for Cycle {next_cycle}, next round is {next_round_num}")
+                # Update ALL non-completed rounds to be part of the next cycle
+                # (rounds with ID > reference round that are pending or active)
+                future_rounds = Round.query.filter(
+                    Round.status.in_(['pending', 'active']),
+                    Round.id > reference_round.id
+                ).all()
 
-                    return {
-                        'handled': True,
-                        'players_reactivated': len(players_in_round),
-                        'next_cycle': next_cycle,
-                        'next_round_number': next_round_num
-                    }
+                if future_rounds:
+                    for round_obj in future_rounds:
+                        round_obj.cycle_number = next_cycle
+                        db.session.add(round_obj)
+                        app.logger.info(f"ROLLOVER: Updated round {round_obj.id} (Round {round_obj.round_number}) to Cycle {next_cycle}")
+                else:
+                    app.logger.info("ROLLOVER: No future rounds exist yet - admin should create Round 1 of new cycle")
+
+                db.session.commit()
+
+                # Determine the next round number in the sequence
+                next_round_num = future_rounds[0].round_number if future_rounds else (reference_round.round_number + 1)
+                app.logger.info(f"ROLLOVER COMPLETE: {len(all_eliminated_players)} players reactivated for Cycle {next_cycle}")
+
+                return {
+                    'handled': True,
+                    'players_reactivated': len(all_eliminated_players),
+                    'next_cycle': next_cycle,
+                    'next_round_number': next_round_num,
+                    'reference_round_id': reference_round.id
+                }
 
         return None
     except Exception as e:
@@ -2494,20 +2515,32 @@ def download_export_file(filename):
         return f"Error downloading file: {str(e)}", 500
 
 @app.route('/api/rounds/<int:round_id>/process-results', methods=['POST'])
-@admin_required  
+@admin_required
 def process_round_results(round_id):
     """Process match results and eliminate players"""
     try:
         data = request.get_json()
         fixture_results = data.get('results', [])
-        
+
         if not fixture_results:
             return jsonify({'success': False, 'error': 'No results provided'}), 400
-        
+
         round_obj = Round.query.get_or_404(round_id)
+
+        # GUARD: Block processing if round was early-terminated
+        # This prevents fixture results from corrupting state after rollover
+        if round_obj.special_measure == 'EARLY_TERMINATED':
+            app.logger.warning(f"BLOCKED: Round {round_obj.round_number} was early-terminated. Ignoring fixture results.")
+            return jsonify({
+                'success': False,
+                'error': f'Round {round_obj.round_number} was early-terminated (all players eliminated). '
+                         f'Remaining fixtures are irrelevant and cannot be processed.',
+                'special_measure': 'EARLY_TERMINATED'
+            }), 400
+
         eliminated_players = []
         surviving_players = []
-        
+
         # Update fixture results
         for result in fixture_results:
             fixture_id = result.get('fixture_id')
@@ -2563,41 +2596,73 @@ def process_round_results(round_id):
 
         # Check current player status after processing these results
         active_players_count = Player.query.filter_by(status='active').count()
+        eliminated_players_global = Player.query.filter_by(status='eliminated').count()
 
         # Count picks in this round and their outcomes
         round_picks = Pick.query.filter_by(round_id=round_id).all()
         picks_with_result = [p for p in round_picks if p.is_winner is not None]
         picks_winners = [p for p in round_picks if p.is_winner == True]
         picks_eliminated = [p for p in round_picks if p.is_eliminated == True]
+        eliminated_picks_count = len(picks_eliminated)
 
         # Diagnostic logging for rollover decision
-        app.logger.info(f"ROLLOVER CHECK for Round {round_obj.round_number} (ID={round_id}):")
+        app.logger.info("=" * 60)
+        app.logger.info(f"PROCESS-RESULTS for Round {round_obj.round_number} (ID={round_id}, Cycle={round_obj.cycle_number}):")
         app.logger.info(f"  Fixtures: {completed_fixtures}/{total_fixtures} completed")
-        app.logger.info(f"  Picks: {len(round_picks)} total, {len(picks_with_result)} processed, {len(picks_winners)} winners, {len(picks_eliminated)} eliminated")
-        app.logger.info(f"  Active players remaining: {active_players_count}")
+        app.logger.info(f"  Picks: {len(round_picks)} total, {len(picks_with_result)} with is_winner, {len(picks_winners)} winners, {eliminated_picks_count} eliminated")
+        app.logger.info(f"  Players: {active_players_count} active, {eliminated_players_global} eliminated globally")
+        app.logger.info(f"  first_kickoff_at: {round_obj.first_kickoff_at}")
 
         rollover_info = None
         early_termination = False
 
-        # EARLY TERMINATION: If zero active players remain, end the round immediately
-        # regardless of whether all fixtures have been played (remaining fixtures are irrelevant)
-        if active_players_count == 0 and len(picks_with_result) > 0:
-            app.logger.info(f"EARLY TERMINATION: All players eliminated after {completed_fixtures}/{total_fixtures} fixtures")
-            app.logger.info(f"  Remaining {total_fixtures - completed_fixtures} fixtures are now irrelevant - triggering rollover")
+        # EARLY TERMINATION CHECK
+        # Conditions (ALL must be true):
+        #   1. active_players_count == 0
+        #   2. eliminated_players_global > 0 (there are players to reactivate)
+        #   3. Safety check: eliminated_picks_count > 0 OR (kickoff_passed AND round has picks)
+        #      (prevents rollover from partial/dirty pick state before round starts)
+        now_utc = datetime.now(timezone.utc)
+        # Safe kickoff comparison: if first_kickoff_at is naive, assume UTC; if aware, compare directly
+        if round_obj.first_kickoff_at:
+            kickoff_dt = round_obj.first_kickoff_at
+            if kickoff_dt.tzinfo is None:
+                kickoff_dt = kickoff_dt.replace(tzinfo=timezone.utc)
+            kickoff_passed = now_utc >= kickoff_dt
+        else:
+            kickoff_passed = False
+        safe_to_terminate = eliminated_picks_count > 0 or (kickoff_passed and len(round_picks) > 0)
+
+        if active_players_count == 0 and eliminated_players_global > 0 and safe_to_terminate:
+            # Log start of early termination
+            app.logger.info(f">>> EARLY TERMINATION START")
+            app.logger.info(f"    active_count={active_players_count}, eliminated_count={eliminated_players_global}")
+            app.logger.info(f"    reference_round_id={round_obj.id}, status={round_obj.status}, special_measure={round_obj.special_measure}")
+            app.logger.info(f"    Safety: {eliminated_picks_count} eliminated picks, kickoff_passed={kickoff_passed}, round_picks={len(round_picks)}")
+            app.logger.info(f"    Action: Setting status='completed' + special_measure='EARLY_TERMINATED'")
+            app.logger.info(f"    Remaining {total_fixtures - completed_fixtures} fixtures are now locked out")
+
+            # Mark round as completed AND set special_measure to prevent future processing
             round_obj.status = 'completed'
+            round_obj.special_measure = 'EARLY_TERMINATED'
+            round_obj.special_note = f'Early terminated: all players eliminated after {completed_fixtures}/{total_fixtures} fixtures'
             early_termination = True
             db.session.flush()
 
-            # Handle rollover scenario
-            rollover_info = handle_rollover_scenario()
+            # Handle rollover scenario - pass this round as reference
+            rollover_info = handle_rollover_scenario(reference_round=round_obj)
             if rollover_info:
                 reactivated_players = Player.query.filter_by(status='active').all()
                 surviving_players = [p.name for p in reactivated_players]
                 eliminated_players = []
+                app.logger.info(f"    Rollover: SUCCESS - players_reactivated={rollover_info['players_reactivated']}, next_cycle={rollover_info['next_cycle']}")
+            else:
+                app.logger.warning(f"    Rollover: FAILED - handle_rollover_scenario returned None")
+            app.logger.info(f">>> EARLY TERMINATION END")
 
         # NORMAL COMPLETION: All fixtures finished
         elif completed_fixtures == total_fixtures:
-            app.logger.info(f"NORMAL COMPLETION: All {total_fixtures} fixtures completed")
+            app.logger.info(f">>> NORMAL COMPLETION: All {total_fixtures} fixtures completed")
             round_obj.status = 'completed'
             db.session.flush()
 
@@ -2605,14 +2670,24 @@ def process_round_results(round_id):
             auto_detect_and_mark_winner()
 
             # Handle rollover scenario where all players were eliminated
-            rollover_info = handle_rollover_scenario()
+            rollover_info = handle_rollover_scenario(reference_round=round_obj)
             if rollover_info:
                 reactivated_players = Player.query.filter_by(status='active').all()
                 surviving_players = [p.name for p in reactivated_players]
                 eliminated_players = []
+                app.logger.info(f"    Rollover: SUCCESS - {rollover_info['players_reactivated']} players reactivated for Cycle {rollover_info['next_cycle']}")
         else:
-            # Round still in progress
-            app.logger.info(f"ROUND IN PROGRESS: {total_fixtures - completed_fixtures} fixtures remaining, {active_players_count} active players")
+            # Round still in progress - explain why early termination didn't trigger
+            app.logger.info(f">>> ROUND IN PROGRESS (no rollover)")
+            if active_players_count > 0:
+                app.logger.info(f"    Reason: {active_players_count} active players still remain")
+            elif eliminated_players_global == 0:
+                app.logger.info(f"    Reason: No eliminated players globally")
+            elif not safe_to_terminate:
+                app.logger.info(f"    Reason: Safety check failed (no eliminated picks and kickoff not passed)")
+                app.logger.info(f"    Hint: Use POST /api/admin/run-rollover-check to trigger rollover manually")
+            app.logger.info(f"    Waiting for {total_fixtures - completed_fixtures} more fixtures to complete")
+        app.logger.info("=" * 60)
 
         db.session.commit()
 
@@ -2662,6 +2737,254 @@ def process_round_results(round_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/run-rollover-check', methods=['POST'])
+@admin_required
+def run_rollover_check():
+    """Safe admin action to trigger rollover check WITHOUT requiring fixture payloads.
+
+    This endpoint:
+    1. Loads the current active round (highest ID with status='active', excluding EARLY_TERMINATED)
+    2. Computes player counts (active, eliminated)
+    3. If rollover conditions are met (0 active, >0 eliminated):
+       - Marks the reference round: status='completed', special_measure='EARLY_TERMINATED'
+       - Reactivates ALL eliminated players (global, not just those in reference round)
+       - Increments cycle_number for future rounds
+    4. Is IDEMPOTENT: if rollover already happened, returns success with no action
+
+    Use this when:
+    - Fixture results were updated directly in DB (not via process-results API)
+    - Rollover should have triggered but didn't
+    - Need to manually complete a stuck cycle
+
+    Returns detailed diagnostics for Railway logs.
+    """
+    try:
+        # ─────────────────────────────────────────────────────────────────────
+        # STEP 1: Gather comprehensive diagnostics
+        # ─────────────────────────────────────────────────────────────────────
+        active_count = Player.query.filter_by(status='active').count()
+        eliminated_count = Player.query.filter_by(status='eliminated').count()
+        winner_count = Player.query.filter_by(status='winner').count()
+        total_players = Player.query.count()
+
+        # Use highest ID with status='active' as the reference round
+        # Exclude rounds already marked EARLY_TERMINATED
+        active_round = Round.query.filter(
+            Round.status == 'active',
+            or_(Round.special_measure.is_(None), Round.special_measure != 'EARLY_TERMINATED')
+        ).order_by(Round.id.desc()).first()
+        last_completed = Round.query.filter_by(status='completed').order_by(Round.id.desc()).first()
+
+        # Log comprehensive state for Railway debugging
+        app.logger.info("=" * 60)
+        app.logger.info(">>> RUN-ROLLOVER-CHECK START")
+        app.logger.info(f"  active_count={active_count}, eliminated_count={eliminated_count}, winner_count={winner_count}, total={total_players}")
+
+        diagnostics = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'players': {
+                'total': total_players,
+                'active': active_count,
+                'eliminated': eliminated_count,
+                'winner': winner_count
+            },
+            'rounds': {
+                'reference_round': None,
+                'last_completed': None
+            },
+            'actions_taken': [],
+            'rollover_triggered': False
+        }
+
+        # Determine reference round: active round (non-terminated) if exists, else last completed
+        reference_round = active_round if active_round else last_completed
+
+        if reference_round:
+            # Get fixture and pick stats for reference round
+            total_fixtures = Fixture.query.filter_by(round_id=reference_round.id).count()
+            completed_fixtures = Fixture.query.filter_by(round_id=reference_round.id, status='completed').count()
+            scheduled_fixtures = Fixture.query.filter_by(round_id=reference_round.id, status='scheduled').count()
+
+            total_picks = Pick.query.filter_by(round_id=reference_round.id).count()
+            eliminated_picks = Pick.query.filter(
+                Pick.round_id == reference_round.id,
+                Pick.is_eliminated == True
+            ).count()
+            winning_picks = Pick.query.filter(
+                Pick.round_id == reference_round.id,
+                Pick.is_winner == True
+            ).count()
+
+            diagnostics['rounds']['reference_round'] = {
+                'id': reference_round.id,
+                'round_number': reference_round.round_number,
+                'cycle_number': reference_round.cycle_number,
+                'status': reference_round.status,
+                'special_measure': reference_round.special_measure,
+                'first_kickoff_at': reference_round.first_kickoff_at.isoformat() if reference_round.first_kickoff_at else None,
+                'fixtures': {
+                    'total': total_fixtures,
+                    'completed': completed_fixtures,
+                    'scheduled': scheduled_fixtures
+                },
+                'picks': {
+                    'total': total_picks,
+                    'eliminated': eliminated_picks,
+                    'winners': winning_picks
+                }
+            }
+
+            app.logger.info(f"  reference_round_id={reference_round.id}, reference_round_status={reference_round.status}, reference_round_special_measure={reference_round.special_measure}")
+            app.logger.info(f"  Round #{reference_round.round_number}, Cycle={reference_round.cycle_number}")
+            app.logger.info(f"  first_kickoff_at: {reference_round.first_kickoff_at}")
+            app.logger.info(f"  Fixtures: {completed_fixtures}/{total_fixtures} completed, {scheduled_fixtures} scheduled")
+            app.logger.info(f"  Picks: {total_picks} total, {eliminated_picks} eliminated, {winning_picks} winners")
+
+        if last_completed and last_completed != reference_round:
+            diagnostics['rounds']['last_completed'] = {
+                'id': last_completed.id,
+                'round_number': last_completed.round_number,
+                'cycle_number': last_completed.cycle_number
+            }
+
+        # ─────────────────────────────────────────────────────────────────────
+        # STEP 2: IDEMPOTENCY CHECK - Has rollover already happened?
+        # ─────────────────────────────────────────────────────────────────────
+        # Rollover already happened if:
+        # - There are active players (they were reactivated)
+        # - There are no eliminated players left (all reactivated or none exist)
+        # - The reference round has special_measure='EARLY_TERMINATED' AND active_count > 0
+        if active_count > 0:
+            reason = f'Rollover already handled or not needed: {active_count} active players exist'
+            app.logger.info(f"  IDEMPOTENCY: {reason}")
+            app.logger.info("=" * 60)
+            return jsonify({
+                'success': True,
+                'rollover_triggered': False,
+                'already_handled': True,
+                'reason': reason,
+                'diagnostics': diagnostics
+            })
+
+        if eliminated_count == 0:
+            reason = f'No eliminated players to reactivate (total players: {total_players})'
+            app.logger.info(f"  IDEMPOTENCY: {reason}")
+            app.logger.info("=" * 60)
+            return jsonify({
+                'success': True,
+                'rollover_triggered': False,
+                'already_handled': True,
+                'reason': reason,
+                'diagnostics': diagnostics
+            })
+
+        # Additional idempotency: if reference round is already EARLY_TERMINATED but no active players,
+        # something is wrong (rollover partially failed) - we should proceed to reactivate
+        if reference_round and reference_round.special_measure == 'EARLY_TERMINATED':
+            app.logger.warning(f"  Reference round already EARLY_TERMINATED but 0 active players - will reactivate")
+
+        # ─────────────────────────────────────────────────────────────────────
+        # STEP 3: Rollover conditions are met - perform rollover
+        # ─────────────────────────────────────────────────────────────────────
+        app.logger.info(f"  Decision: ROLLOVER NEEDED (0 active, {eliminated_count} eliminated)")
+
+        if not reference_round:
+            app.logger.error("  ERROR: No reference round found (no active or completed rounds)")
+            app.logger.info("=" * 60)
+            return jsonify({
+                'success': False,
+                'rollover_triggered': False,
+                'reason': 'No active or completed round found to use as reference',
+                'diagnostics': diagnostics
+            }), 400
+
+        # Mark the reference round as completed with EARLY_TERMINATED
+        # This prevents future fixture processing on this round
+        if reference_round.status == 'active':
+            app.logger.info(f"  Action: Setting status='completed' + special_measure='EARLY_TERMINATED' on Round #{reference_round.round_number}")
+            reference_round.status = 'completed'
+            reference_round.special_measure = 'EARLY_TERMINATED'
+            reference_round.special_note = f'Early terminated via admin run-rollover-check'
+            db.session.add(reference_round)
+            diagnostics['actions_taken'].append(f"Marked Round {reference_round.round_number} as completed with EARLY_TERMINATED")
+        elif reference_round.special_measure != 'EARLY_TERMINATED':
+            # Round is already completed but not marked as early terminated
+            app.logger.info(f"  Action: Setting special_measure='EARLY_TERMINATED' on already-completed Round #{reference_round.round_number}")
+            reference_round.special_measure = 'EARLY_TERMINATED'
+            db.session.add(reference_round)
+            diagnostics['actions_taken'].append(f"Set Round {reference_round.round_number} special_measure='EARLY_TERMINATED'")
+
+        # Reactivate ALL eliminated players (global, not just those in reference round)
+        all_eliminated = Player.query.filter_by(status='eliminated').all()
+        reactivated_count = len(all_eliminated)
+
+        app.logger.info(f"  Action: Reactivating ALL {reactivated_count} eliminated players (global)")
+        for player in all_eliminated:
+            player.status = 'active'
+            db.session.add(player)
+
+        # Calculate the next cycle number
+        current_cycle = reference_round.cycle_number or 1
+        next_cycle = current_cycle + 1
+
+        # Update future rounds to the new cycle
+        future_rounds = Round.query.filter(
+            Round.status.in_(['pending', 'active']),
+            Round.id > reference_round.id
+        ).all()
+
+        for future_round in future_rounds:
+            app.logger.info(f"  Action: Updating Round {future_round.round_number} (ID={future_round.id}) to Cycle {next_cycle}")
+            future_round.cycle_number = next_cycle
+            db.session.add(future_round)
+
+        diagnostics['actions_taken'].append(f"Reactivated {reactivated_count} players for Cycle {next_cycle}")
+        if future_rounds:
+            diagnostics['actions_taken'].append(f"Updated {len(future_rounds)} future rounds to Cycle {next_cycle}")
+
+        db.session.commit()
+
+        # Verify the new state
+        new_active_count = Player.query.filter_by(status='active').count()
+        diagnostics['rollover_triggered'] = True
+        diagnostics['post_rollover_active_players'] = new_active_count
+        diagnostics['new_cycle'] = next_cycle
+
+        app.logger.info(f"  Result: ROLLOVER SUCCESS")
+        app.logger.info(f"  players_reactivated={reactivated_count}, next_cycle={next_cycle}, new_active_count={new_active_count}")
+        app.logger.info(">>> RUN-ROLLOVER-CHECK END")
+        app.logger.info("=" * 60)
+
+        return jsonify({
+            'success': True,
+            'rollover_triggered': True,
+            'message': f"Rollover complete! {reactivated_count} players reactivated for Cycle {next_cycle}",
+            'players_reactivated': reactivated_count,
+            'next_cycle': next_cycle,
+            'diagnostics': diagnostics
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"RUN-ROLLOVER-CHECK failed with exception: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'diagnostics': diagnostics if 'diagnostics' in locals() else None
+        }), 500
+
+
+# Legacy endpoint - redirects to run-rollover-check for backwards compatibility
+@app.route('/api/admin/force-rollover-check', methods=['POST'])
+@admin_required
+def force_rollover_check():
+    """Legacy endpoint - redirects to run-rollover-check."""
+    return run_rollover_check()
+
 
 @app.route('/api/import-historical-picks', methods=['POST'])
 @admin_required
