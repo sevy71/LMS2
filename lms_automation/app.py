@@ -157,9 +157,18 @@ def get_current_active_round():
         - Logs warning if multiple active rounds exist
         - Auto-deactivates (marks completed) any active rounds from older cycles
         - Ignores rounds with special_measure='EARLY_TERMINATED'
+
+    Note on SEASON_BREAK:
+        - Rounds with SEASON_BREAK are typically 'pending' status, not 'active'
+        - This function only returns 'active' status rounds
+        - To check for season break, use /api/admin/season-status or check for
+          SEASON_BREAK/WAITING_FOR_FIXTURES special_measure directly
     """
     try:
         # Find all active rounds, excluding EARLY_TERMINATED ones
+        # Note: SEASON_BREAK rounds typically have status='pending', not 'active',
+        # so they won't be returned here. This is intentional - use season-status API
+        # to detect season breaks.
         active_rounds = Round.query.filter(
             Round.status == 'active',
             or_(Round.special_measure.is_(None), Round.special_measure != 'EARLY_TERMINATED')
@@ -278,12 +287,22 @@ def handle_rollover_scenario(reference_round=None):
                 next_round_num = future_rounds[0].round_number if future_rounds else (reference_round.round_number + 1)
                 app.logger.info(f"ROLLOVER COMPLETE: {len(all_eliminated_players)} players reactivated for Cycle {next_cycle}")
 
+                # AUTO-CREATE NEXT ROUND after rollover
+                next_round_info = create_next_round_after_rollover(reference_round, next_cycle)
+                app.logger.info(f"AUTO-CREATE NEXT ROUND: {next_round_info['message']}")
+
                 return {
                     'handled': True,
                     'players_reactivated': len(all_eliminated_players),
                     'next_cycle': next_cycle,
-                    'next_round_number': next_round_num,
-                    'reference_round_id': reference_round.id
+                    'next_round_number': next_round_info.get('round_number') or next_round_num,
+                    'reference_round_id': reference_round.id,
+                    'next_round_created': next_round_info.get('created', False),
+                    'next_round_id': next_round_info.get('round_id'),
+                    'next_round_status': next_round_info.get('status'),
+                    'next_round_fixtures': next_round_info.get('fixtures_loaded', 0),
+                    'season_break': next_round_info.get('season_break', False),
+                    'next_round_message': next_round_info.get('message')
                 }
 
         return None
@@ -291,6 +310,318 @@ def handle_rollover_scenario(reference_round=None):
         app.logger.error(f"Error handling rollover scenario: {e}")
         db.session.rollback()
         return None
+
+
+# --- Season break detection and next round creation ---
+# Special measure values for season handling:
+#   SEASON_BREAK - No fixtures available (season ended, waiting for next season)
+#   WAITING_FOR_FIXTURES - Round created but fixtures not yet available
+#   EARLY_TERMINATED - Round ended early due to all players eliminated
+
+def fetch_upcoming_fixtures(horizon_days: int = 45) -> dict:
+    """Fetch upcoming Premier League fixtures to detect season availability.
+
+    Args:
+        horizon_days: Number of days to look ahead for fixtures (default 45)
+
+    Returns:
+        dict with keys:
+            'available': bool - True if fixtures are available
+            'fixtures_count': int - Number of upcoming fixtures found
+            'next_matchday': int or None - Next available matchday
+            'earliest_date': date or None - Earliest fixture date
+            'error': str or None - Error message if API failed
+    """
+    try:
+        from football_api import FootballDataAPI
+        api = FootballDataAPI()
+
+        # Fetch all fixtures for current season
+        fixtures_data = api.get_premier_league_fixtures(season='2025')
+        matches = fixtures_data.get('matches', [])
+
+        if not matches:
+            app.logger.warning("SEASON CHECK: No matches returned from API")
+            return {
+                'available': False,
+                'fixtures_count': 0,
+                'next_matchday': None,
+                'earliest_date': None,
+                'error': 'No matches returned from football API'
+            }
+
+        # Filter to upcoming scheduled matches
+        now = datetime.now(timezone.utc)
+        horizon_end = now + timedelta(days=horizon_days)
+
+        upcoming = []
+        for match in matches:
+            if match.get('status') not in ('SCHEDULED', 'TIMED'):
+                continue
+            if not match.get('utcDate'):
+                continue
+            try:
+                match_dt = datetime.fromisoformat(match['utcDate'].replace('Z', '+00:00'))
+                if now <= match_dt <= horizon_end:
+                    upcoming.append({
+                        'matchday': match.get('matchday'),
+                        'date': match_dt.date(),
+                        'datetime': match_dt
+                    })
+            except (ValueError, TypeError):
+                continue
+
+        if not upcoming:
+            app.logger.info(f"SEASON CHECK: No upcoming fixtures in next {horizon_days} days")
+            return {
+                'available': False,
+                'fixtures_count': 0,
+                'next_matchday': None,
+                'earliest_date': None,
+                'error': None  # Not an error - just no fixtures
+            }
+
+        # Sort by date and get the earliest matchday
+        upcoming.sort(key=lambda x: x['datetime'])
+        next_matchday = upcoming[0]['matchday']
+        earliest_date = upcoming[0]['date']
+
+        app.logger.info(f"SEASON CHECK: Found {len(upcoming)} upcoming fixtures, next matchday={next_matchday}, earliest={earliest_date}")
+
+        return {
+            'available': True,
+            'fixtures_count': len(upcoming),
+            'next_matchday': next_matchday,
+            'earliest_date': earliest_date,
+            'error': None
+        }
+
+    except Exception as e:
+        app.logger.error(f"SEASON CHECK failed: {e}")
+        return {
+            'available': False,
+            'fixtures_count': 0,
+            'next_matchday': None,
+            'earliest_date': None,
+            'error': str(e)
+        }
+
+
+def create_next_round_after_rollover(reference_round: Round, next_cycle: int) -> dict:
+    """Create the next round automatically after a rollover.
+
+    This function is IDEMPOTENT - if the next round already exists, it returns
+    info about the existing round without creating duplicates.
+
+    Args:
+        reference_round: The round that triggered the rollover (now completed)
+        next_cycle: The cycle number for the new round
+
+    Returns:
+        dict with keys:
+            'created': bool - True if a new round was created
+            'round_id': int - ID of the created or existing round
+            'round_number': int - Round number
+            'cycle_number': int - Cycle number
+            'status': str - Round status
+            'special_measure': str or None - Special measure if set
+            'fixtures_loaded': int - Number of fixtures loaded (0 if season break)
+            'season_break': bool - True if no fixtures available (season ended)
+            'message': str - Human-readable result message
+    """
+    try:
+        # Calculate the next round number (global sequence)
+        max_round = db.session.query(db.func.max(Round.round_number)).scalar() or 0
+        next_round_number = max_round + 1
+
+        # IDEMPOTENCY CHECK: Does a round with this (round_number, cycle_number) already exist?
+        existing_round = Round.query.filter_by(
+            round_number=next_round_number,
+            cycle_number=next_cycle
+        ).first()
+
+        if existing_round:
+            app.logger.info(f"NEXT ROUND EXISTS: id={existing_round.id}, round={existing_round.round_number}, cycle={existing_round.cycle_number}")
+            return {
+                'created': False,
+                'round_id': existing_round.id,
+                'round_number': existing_round.round_number,
+                'cycle_number': existing_round.cycle_number,
+                'status': existing_round.status,
+                'special_measure': existing_round.special_measure,
+                'fixtures_loaded': len(existing_round.fixtures) if existing_round.fixtures else 0,
+                'season_break': existing_round.special_measure == 'SEASON_BREAK',
+                'message': f'Round {existing_round.round_number} already exists (Cycle {existing_round.cycle_number})'
+            }
+
+        # Check fixture availability to detect season break
+        fixture_check = fetch_upcoming_fixtures(horizon_days=45)
+
+        if not fixture_check['available']:
+            # SEASON BREAK: Create round in suspended state
+            app.logger.info(f"SEASON BREAK DETECTED: No fixtures available")
+
+            new_round = Round(
+                round_number=next_round_number,
+                cycle_number=next_cycle,
+                pl_matchday=None,  # Unknown until fixtures available
+                status='pending',
+                special_measure='SEASON_BREAK',
+                special_note='No fixtures found — season ended or break. Waiting for next season schedule. Use /api/admin/check-new-season to resume.'
+            )
+            db.session.add(new_round)
+            db.session.commit()
+
+            app.logger.info(f"NEXT ROUND CREATED (SEASON BREAK): id={new_round.id}, round={new_round.round_number}, cycle={new_round.cycle_number}")
+
+            return {
+                'created': True,
+                'round_id': new_round.id,
+                'round_number': new_round.round_number,
+                'cycle_number': new_round.cycle_number,
+                'status': new_round.status,
+                'special_measure': new_round.special_measure,
+                'fixtures_loaded': 0,
+                'season_break': True,
+                'message': f'Round {new_round.round_number} created but SEASON BREAK — no fixtures available'
+            }
+
+        # Fixtures available - create normal round with fixtures
+        next_matchday = fixture_check['next_matchday']
+
+        # Check if this matchday is already used in a recent round
+        # If so, try the next matchday
+        matchday_in_use = Round.query.filter_by(pl_matchday=next_matchday).first()
+        if matchday_in_use:
+            # Try to find the next available matchday
+            app.logger.info(f"Matchday {next_matchday} already used, searching for next available")
+            from football_api import FootballDataAPI
+            api = FootballDataAPI()
+            fixtures_data = api.get_premier_league_fixtures(season='2025')
+
+            used_matchdays = {r.pl_matchday for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()}
+            available_matchdays = set()
+            for match in fixtures_data.get('matches', []):
+                md = match.get('matchday')
+                if md and md not in used_matchdays:
+                    available_matchdays.add(md)
+
+            if available_matchdays:
+                next_matchday = min(available_matchdays)
+                app.logger.info(f"Using next available matchday: {next_matchday}")
+            else:
+                # All matchdays used - season might be ending
+                app.logger.warning("All matchdays used - treating as season break")
+                new_round = Round(
+                    round_number=next_round_number,
+                    cycle_number=next_cycle,
+                    pl_matchday=None,
+                    status='pending',
+                    special_measure='SEASON_BREAK',
+                    special_note='All matchdays exhausted — waiting for next season schedule.'
+                )
+                db.session.add(new_round)
+                db.session.commit()
+
+                return {
+                    'created': True,
+                    'round_id': new_round.id,
+                    'round_number': new_round.round_number,
+                    'cycle_number': new_round.cycle_number,
+                    'status': new_round.status,
+                    'special_measure': new_round.special_measure,
+                    'fixtures_loaded': 0,
+                    'season_break': True,
+                    'message': f'Round {new_round.round_number} created but all matchdays exhausted'
+                }
+
+        # Create the new round
+        new_round = Round(
+            round_number=next_round_number,
+            cycle_number=next_cycle,
+            pl_matchday=next_matchday,
+            status='active',  # Ready for picks
+            special_measure=None,
+            special_note=f'Auto-created after rollover from Cycle {next_cycle - 1}'
+        )
+        db.session.add(new_round)
+        db.session.flush()  # Get the ID
+
+        # Load fixtures from API
+        fixtures_loaded = 0
+        earliest_kickoff = None
+
+        try:
+            from football_api import FootballDataAPI
+            api = FootballDataAPI()
+            fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday, season='2025')
+            formatted_fixtures = api.format_fixtures_for_db(fixtures_data, next_matchday)
+
+            for fixture_data in formatted_fixtures:
+                fixture = Fixture(
+                    round_id=new_round.id,
+                    event_id=fixture_data['event_id'],
+                    home_team=fixture_data['home_team'],
+                    away_team=fixture_data['away_team'],
+                    date=fixture_data['date'],
+                    time=fixture_data['time'],
+                    home_score=fixture_data['home_score'],
+                    away_score=fixture_data['away_score'],
+                    status=fixture_data['status']
+                )
+                db.session.add(fixture)
+                fixtures_loaded += 1
+
+                # Track earliest kickoff
+                if fixture_data['date'] and fixture_data['time']:
+                    try:
+                        dt = datetime.combine(fixture_data['date'], fixture_data['time'])
+                        if earliest_kickoff is None or dt < earliest_kickoff:
+                            earliest_kickoff = dt
+                    except Exception:
+                        pass
+
+            if earliest_kickoff:
+                new_round.first_kickoff_at = earliest_kickoff
+
+        except Exception as fixture_error:
+            app.logger.warning(f"Failed to load fixtures for new round: {fixture_error}")
+            # Round created but no fixtures - mark as waiting
+            new_round.special_measure = 'WAITING_FOR_FIXTURES'
+            new_round.special_note = f'Round created but fixture loading failed: {fixture_error}'
+            new_round.status = 'pending'
+
+        db.session.commit()
+
+        app.logger.info(f"NEXT ROUND CREATED: id={new_round.id}, round={new_round.round_number}, cycle={new_round.cycle_number}, matchday={next_matchday}, fixtures={fixtures_loaded}")
+
+        return {
+            'created': True,
+            'round_id': new_round.id,
+            'round_number': new_round.round_number,
+            'cycle_number': new_round.cycle_number,
+            'status': new_round.status,
+            'special_measure': new_round.special_measure,
+            'fixtures_loaded': fixtures_loaded,
+            'season_break': False,
+            'message': f'Round {new_round.round_number} created with {fixtures_loaded} fixtures (Matchday {next_matchday})'
+        }
+
+    except Exception as e:
+        app.logger.error(f"Failed to create next round after rollover: {e}")
+        db.session.rollback()
+        return {
+            'created': False,
+            'round_id': None,
+            'round_number': None,
+            'cycle_number': next_cycle,
+            'status': None,
+            'special_measure': None,
+            'fixtures_loaded': 0,
+            'season_break': False,
+            'message': f'Failed to create next round: {e}'
+        }
+
 
 # --- Optional auto-migration on startup (useful for Railway/Heroku) ---
 def _auto_run_migrations_if_enabled():
@@ -2732,6 +3063,19 @@ def process_round_results(round_id):
             response_data['next_round_number'] = rollover_info['next_round_number']
             response_data['next_cycle'] = rollover_info['next_cycle']
 
+            # Include auto-created next round info
+            if rollover_info.get('next_round_created'):
+                response_data['next_round_created'] = True
+                response_data['next_round_id'] = rollover_info.get('next_round_id')
+                response_data['next_round_status'] = rollover_info.get('next_round_status')
+                response_data['next_round_fixtures'] = rollover_info.get('next_round_fixtures', 0)
+                response_data['next_round_message'] = rollover_info.get('next_round_message')
+
+            # Add season break warning if applicable
+            if rollover_info.get('season_break'):
+                response_data['season_break'] = True
+                response_data['season_break_warning'] = 'Season break detected — no fixtures available. Game suspended until next season. Use /api/admin/check-new-season to resume.'
+
         return jsonify(response_data)
         
     except Exception as e:
@@ -2952,19 +3296,43 @@ def run_rollover_check():
         diagnostics['post_rollover_active_players'] = new_active_count
         diagnostics['new_cycle'] = next_cycle
 
+        # AUTO-CREATE NEXT ROUND after rollover
+        app.logger.info(f"  Action: Auto-creating next round for Cycle {next_cycle}")
+        next_round_info = create_next_round_after_rollover(reference_round, next_cycle)
+        app.logger.info(f"  Next Round Result: {next_round_info['message']}")
+
+        diagnostics['next_round'] = {
+            'created': next_round_info.get('created', False),
+            'round_id': next_round_info.get('round_id'),
+            'round_number': next_round_info.get('round_number'),
+            'status': next_round_info.get('status'),
+            'special_measure': next_round_info.get('special_measure'),
+            'fixtures_loaded': next_round_info.get('fixtures_loaded', 0),
+            'season_break': next_round_info.get('season_break', False),
+            'message': next_round_info.get('message')
+        }
+        diagnostics['actions_taken'].append(f"Next round: {next_round_info['message']}")
+
         app.logger.info(f"  Result: ROLLOVER SUCCESS")
         app.logger.info(f"  players_reactivated={reactivated_count}, next_cycle={next_cycle}, new_active_count={new_active_count}")
         app.logger.info(">>> RUN-ROLLOVER-CHECK END")
         app.logger.info("=" * 60)
 
-        return jsonify({
+        response = {
             'success': True,
             'rollover_triggered': True,
             'message': f"Rollover complete! {reactivated_count} players reactivated for Cycle {next_cycle}",
             'players_reactivated': reactivated_count,
             'next_cycle': next_cycle,
+            'next_round': next_round_info,
             'diagnostics': diagnostics
-        })
+        }
+
+        # Add season break warning if applicable
+        if next_round_info.get('season_break'):
+            response['season_break_warning'] = 'Season break detected — no fixtures available. Game suspended until next season. Use /api/admin/check-new-season to resume.'
+
+        return jsonify(response)
 
     except Exception as e:
         db.session.rollback()
@@ -2984,6 +3352,291 @@ def run_rollover_check():
 def force_rollover_check():
     """Legacy endpoint - redirects to run-rollover-check."""
     return run_rollover_check()
+
+
+@app.route('/api/admin/check-new-season', methods=['POST'])
+@admin_required
+def check_new_season():
+    """Check if new season fixtures are available and resume play if so.
+
+    This endpoint should be called when the game is in SEASON_BREAK state
+    to check if the new season's fixtures have become available.
+
+    Flow:
+    1. Find the most recent round with SEASON_BREAK status
+    2. Check if fixtures are now available via the football API
+    3. If available:
+       - Update the round with fixtures
+       - Set status to 'active'
+       - Clear the SEASON_BREAK special_measure
+    4. If not available:
+       - Return info that season is still on break
+
+    Returns JSON with:
+        - success: bool
+        - fixtures_available: bool
+        - message: str
+        - round_info: dict (if fixtures loaded)
+    """
+    try:
+        app.logger.info("=" * 60)
+        app.logger.info(">>> CHECK-NEW-SEASON START")
+
+        # Find the most recent SEASON_BREAK round
+        season_break_round = Round.query.filter(
+            Round.special_measure == 'SEASON_BREAK'
+        ).order_by(Round.id.desc()).first()
+
+        # Also check for WAITING_FOR_FIXTURES rounds
+        waiting_round = Round.query.filter(
+            Round.special_measure == 'WAITING_FOR_FIXTURES'
+        ).order_by(Round.id.desc()).first()
+
+        # Use whichever is more recent
+        target_round = None
+        if season_break_round and waiting_round:
+            target_round = season_break_round if season_break_round.id > waiting_round.id else waiting_round
+        else:
+            target_round = season_break_round or waiting_round
+
+        if not target_round:
+            app.logger.info("  No SEASON_BREAK or WAITING_FOR_FIXTURES round found")
+            app.logger.info(">>> CHECK-NEW-SEASON END")
+            app.logger.info("=" * 60)
+            return jsonify({
+                'success': True,
+                'fixtures_available': False,
+                'message': 'No suspended round found — game is not in season break mode',
+                'round_info': None
+            })
+
+        app.logger.info(f"  Found target round: id={target_round.id}, round={target_round.round_number}, status={target_round.status}, special_measure={target_round.special_measure}")
+
+        # Check for available fixtures
+        fixture_check = fetch_upcoming_fixtures(horizon_days=45)
+
+        if not fixture_check['available']:
+            app.logger.info(f"  Fixtures still not available: {fixture_check.get('error') or 'No upcoming fixtures'}")
+            app.logger.info(">>> CHECK-NEW-SEASON END")
+            app.logger.info("=" * 60)
+            return jsonify({
+                'success': True,
+                'fixtures_available': False,
+                'message': 'Season still on break — no fixtures available yet. Check back later.',
+                'check_result': fixture_check,
+                'round_info': {
+                    'id': target_round.id,
+                    'round_number': target_round.round_number,
+                    'status': target_round.status,
+                    'special_measure': target_round.special_measure
+                }
+            })
+
+        # Fixtures are available! Load them into the round
+        app.logger.info(f"  Fixtures available! next_matchday={fixture_check['next_matchday']}, count={fixture_check['fixtures_count']}")
+
+        next_matchday = fixture_check['next_matchday']
+
+        # Check if this matchday is already used
+        used_matchdays = {r.pl_matchday for r in Round.query.filter(
+            Round.pl_matchday.isnot(None),
+            Round.id != target_round.id  # Exclude the current round
+        ).all()}
+
+        if next_matchday in used_matchdays:
+            # Find the next unused matchday
+            app.logger.info(f"  Matchday {next_matchday} already used, finding next available")
+            from football_api import FootballDataAPI
+            api = FootballDataAPI()
+            fixtures_data = api.get_premier_league_fixtures(season='2025')
+
+            available_matchdays = set()
+            for match in fixtures_data.get('matches', []):
+                md = match.get('matchday')
+                if md and md not in used_matchdays:
+                    available_matchdays.add(md)
+
+            if not available_matchdays:
+                app.logger.warning("  All matchdays already used")
+                return jsonify({
+                    'success': True,
+                    'fixtures_available': False,
+                    'message': 'All available matchdays have been used. Season may be ending.',
+                    'round_info': {
+                        'id': target_round.id,
+                        'round_number': target_round.round_number,
+                        'status': target_round.status,
+                        'special_measure': target_round.special_measure
+                    }
+                })
+
+            next_matchday = min(available_matchdays)
+            app.logger.info(f"  Using matchday {next_matchday}")
+
+        # Load fixtures into the round
+        from football_api import FootballDataAPI
+        api = FootballDataAPI()
+        fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday, season='2025')
+        formatted_fixtures = api.format_fixtures_for_db(fixtures_data, next_matchday)
+
+        fixtures_loaded = 0
+        earliest_kickoff = None
+
+        # Clear any existing fixtures for this round (safety)
+        Fixture.query.filter_by(round_id=target_round.id).delete()
+
+        for fixture_data in formatted_fixtures:
+            fixture = Fixture(
+                round_id=target_round.id,
+                event_id=fixture_data['event_id'],
+                home_team=fixture_data['home_team'],
+                away_team=fixture_data['away_team'],
+                date=fixture_data['date'],
+                time=fixture_data['time'],
+                home_score=fixture_data['home_score'],
+                away_score=fixture_data['away_score'],
+                status=fixture_data['status']
+            )
+            db.session.add(fixture)
+            fixtures_loaded += 1
+
+            # Track earliest kickoff
+            if fixture_data['date'] and fixture_data['time']:
+                try:
+                    dt = datetime.combine(fixture_data['date'], fixture_data['time'])
+                    if earliest_kickoff is None or dt < earliest_kickoff:
+                        earliest_kickoff = dt
+                except Exception:
+                    pass
+
+        # Update the round
+        target_round.pl_matchday = next_matchday
+        target_round.status = 'active'
+        target_round.special_measure = None
+        target_round.special_note = f'Resumed from season break. Matchday {next_matchday} loaded.'
+        if earliest_kickoff:
+            target_round.first_kickoff_at = earliest_kickoff
+
+        db.session.commit()
+
+        app.logger.info(f"  Round {target_round.round_number} resumed with {fixtures_loaded} fixtures from Matchday {next_matchday}")
+        app.logger.info(">>> CHECK-NEW-SEASON END")
+        app.logger.info("=" * 60)
+
+        return jsonify({
+            'success': True,
+            'fixtures_available': True,
+            'message': f'Season resumed! Round {target_round.round_number} activated with {fixtures_loaded} fixtures from Matchday {next_matchday}',
+            'round_info': {
+                'id': target_round.id,
+                'round_number': target_round.round_number,
+                'cycle_number': target_round.cycle_number,
+                'status': target_round.status,
+                'pl_matchday': target_round.pl_matchday,
+                'fixtures_loaded': fixtures_loaded,
+                'first_kickoff_at': target_round.first_kickoff_at.isoformat() if target_round.first_kickoff_at else None
+            }
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"CHECK-NEW-SEASON failed: {e}")
+        import traceback
+        app.logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/admin/season-status', methods=['GET'])
+@admin_required
+def get_season_status():
+    """Get the current season status including any breaks or suspensions.
+
+    Returns:
+        - season_active: bool - True if game is running normally
+        - season_break: bool - True if in season break
+        - waiting_for_fixtures: bool - True if waiting for fixtures
+        - current_round: dict - Info about the current/latest round
+        - fixture_availability: dict - Result from fetch_upcoming_fixtures()
+        - message: str - Human-readable status
+    """
+    try:
+        # Check for SEASON_BREAK or WAITING_FOR_FIXTURES rounds
+        season_break_round = Round.query.filter(
+            Round.special_measure == 'SEASON_BREAK'
+        ).order_by(Round.id.desc()).first()
+
+        waiting_round = Round.query.filter(
+            Round.special_measure == 'WAITING_FOR_FIXTURES'
+        ).order_by(Round.id.desc()).first()
+
+        # Get current active round
+        active_round = get_current_active_round()
+
+        # Check fixture availability
+        fixture_check = fetch_upcoming_fixtures(horizon_days=45)
+
+        # Determine status
+        season_break = season_break_round is not None
+        waiting_for_fixtures = waiting_round is not None
+        season_active = active_round is not None and not season_break and not waiting_for_fixtures
+
+        # Build current round info
+        current_round = None
+        if season_break_round:
+            current_round = {
+                'id': season_break_round.id,
+                'round_number': season_break_round.round_number,
+                'status': season_break_round.status,
+                'special_measure': season_break_round.special_measure,
+                'special_note': season_break_round.special_note
+            }
+        elif waiting_round:
+            current_round = {
+                'id': waiting_round.id,
+                'round_number': waiting_round.round_number,
+                'status': waiting_round.status,
+                'special_measure': waiting_round.special_measure,
+                'special_note': waiting_round.special_note
+            }
+        elif active_round:
+            current_round = {
+                'id': active_round.id,
+                'round_number': active_round.round_number,
+                'status': active_round.status,
+                'special_measure': active_round.special_measure,
+                'pl_matchday': active_round.pl_matchday,
+                'first_kickoff_at': active_round.first_kickoff_at.isoformat() if active_round.first_kickoff_at else None
+            }
+
+        # Build message
+        if season_break:
+            message = 'Season break — game suspended until fixtures return. Use "Check for new season" to resume.'
+        elif waiting_for_fixtures:
+            message = 'Waiting for fixtures — round created but fixtures not yet loaded.'
+        elif season_active:
+            message = f'Season active — Round {active_round.round_number} is in progress.'
+        else:
+            message = 'No active round. Create a new round to continue.'
+
+        return jsonify({
+            'success': True,
+            'season_active': season_active,
+            'season_break': season_break,
+            'waiting_for_fixtures': waiting_for_fixtures,
+            'current_round': current_round,
+            'fixture_availability': fixture_check,
+            'message': message
+        })
+
+    except Exception as e:
+        app.logger.error(f"GET-SEASON-STATUS failed: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 
 @app.route('/api/import-historical-picks', methods=['POST'])
