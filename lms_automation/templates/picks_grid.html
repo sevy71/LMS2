@@ -289,6 +289,78 @@
     border-left: 4px solid #007bff;
 }
 
+/* Frozen Paid Column (second frozen column) */
+.grid-corner-paid {
+    left: 180px;
+    border-left: 1px solid #adb5bd;
+}
+
+.grid-paid {
+    position: sticky;
+    left: 180px;
+    z-index: 10;
+    background: white;
+    border-right: 2px solid #adb5bd;
+    overflow-y: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.grid-paid::-webkit-scrollbar {
+    display: none;
+}
+
+.paid-cell {
+    padding: 4px 4px;
+    border-bottom: 1px solid #dee2e6;
+    border-left: 1px solid #dee2e6;
+    background: white;
+    font-size: 0.8rem;
+    height: 45px;
+    min-height: 45px;
+    max-height: 45px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.paid-cell:nth-child(even) {
+    background-color: #f8f9fa;
+}
+
+.paid-cell.group-header {
+    background: #6c757d;
+}
+
+.paid-date-input {
+    width: 100%;
+    max-width: 95px;
+    padding: 2px 4px;
+    font-size: 0.75rem;
+    border: 1px solid #ced4da;
+    border-radius: 3px;
+    background: white;
+}
+
+.paid-date-input:focus {
+    border-color: #80bdff;
+    outline: 0;
+    box-shadow: 0 0 0 0.1rem rgba(0,123,255,.25);
+}
+
+.paid-date-input.saving {
+    background-color: #fff3cd;
+}
+
+.paid-date-input.saved {
+    background-color: #d4edda;
+}
+
+.paid-date-input.error {
+    background-color: #f8d7da;
+    border-color: #dc3545;
+}
+
 /* Status badges */
 .status-badge {
     font-size: 0.7rem;
@@ -637,10 +709,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const roundsToRender = compactMobile ? rounds.slice(-2) : rounds;
 
         // Create spreadsheet grid structure
-        let gridHtml = '<div class="spreadsheet-grid" style="grid-template-columns: 180px 1fr;">';
+        let gridHtml = '<div class="spreadsheet-grid" style="grid-template-columns: 180px 100px 1fr;">';
 
-        // Top-left corner
+        // Top-left corner (spans both frozen columns)
         gridHtml += '<div class="grid-corner">Player</div>';
+        gridHtml += '<div class="grid-corner grid-corner-paid">Paid (date)</div>';
 
         // Headers
         gridHtml += '<div class="grid-headers">';
@@ -674,6 +747,23 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const statusClass = `player-${player.status}`;
             gridHtml += `<div class="name-cell ${statusClass}">${player.name}</div>`;
+        });
+        gridHtml += '</div>';
+
+        // Paid (date) column - frozen next to name
+        gridHtml += '<div class="grid-paid">';
+        currentGroup = '';
+        players.forEach((player, index) => {
+            // Add group separator for status sorting (blank cell for alignment)
+            if (sortBy === 'status' && currentGroup !== player.status) {
+                currentGroup = player.status;
+                gridHtml += '<div class="paid-cell group-header"></div>';
+            }
+
+            const paidValue = player.last_entry_fee_paid_at || '';
+            gridHtml += `<div class="paid-cell">
+                <input type="date" class="paid-date-input" data-player-id="${player.id}" value="${paidValue}">
+            </div>`;
         });
         gridHtml += '</div>';
 
@@ -711,11 +801,51 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Sync scrolling between headers and data
         syncScrolling();
-        
+
         // Setup column resizing
         if (!compactMobile) {
             setupColumnResizing();
         }
+
+        // Setup payment date change handlers
+        setupPaymentDateHandlers();
+    }
+
+    function setupPaymentDateHandlers() {
+        document.querySelectorAll('.paid-date-input').forEach(input => {
+            input.addEventListener('change', function() {
+                const playerId = this.dataset.playerId;
+                const dateValue = this.value || null;
+                const inputEl = this;
+
+                // Visual feedback: saving
+                inputEl.classList.remove('saved', 'error');
+                inputEl.classList.add('saving');
+
+                fetch(`/api/admin/players/${playerId}/payment-date`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ last_entry_fee_paid_at: dateValue })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    inputEl.classList.remove('saving');
+                    if (data.success) {
+                        inputEl.classList.add('saved');
+                        // Clear saved indicator after 2 seconds
+                        setTimeout(() => inputEl.classList.remove('saved'), 2000);
+                    } else {
+                        inputEl.classList.add('error');
+                        console.error('Failed to save payment date:', data.error);
+                    }
+                })
+                .catch(err => {
+                    inputEl.classList.remove('saving');
+                    inputEl.classList.add('error');
+                    console.error('Error saving payment date:', err);
+                });
+            });
+        });
     }
 
     function renderRoundView(data) {
@@ -796,23 +926,34 @@ document.addEventListener('DOMContentLoaded', function() {
         const headers = document.querySelector('.grid-headers');
         const dataGrid = document.querySelector('.grid-data');
         const names = document.querySelector('.grid-names');
-        
+        const paid = document.querySelector('.grid-paid');
+
         if (!headers || !dataGrid || !names) return;
-        
+
         // Sync horizontal scrolling between headers and data
         dataGrid.addEventListener('scroll', function() {
             headers.scrollLeft = dataGrid.scrollLeft;
         });
-        
-        // Sync vertical scrolling between names and data
+
+        // Sync vertical scrolling between names, paid, and data
         dataGrid.addEventListener('scroll', function() {
             names.scrollTop = dataGrid.scrollTop;
+            if (paid) paid.scrollTop = dataGrid.scrollTop;
         });
-        
+
         // Also sync when scrolling the names column
         names.addEventListener('scroll', function() {
             dataGrid.scrollTop = names.scrollTop;
+            if (paid) paid.scrollTop = names.scrollTop;
         });
+
+        // Also sync when scrolling the paid column
+        if (paid) {
+            paid.addEventListener('scroll', function() {
+                dataGrid.scrollTop = paid.scrollTop;
+                names.scrollTop = paid.scrollTop;
+            });
+        }
     }
 
     function setupColumnResizing() {
