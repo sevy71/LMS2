@@ -170,6 +170,27 @@ class PickToken(db.Model):
             
         return f"{base_url}/pick/{self.token}"
 
+class CyclePayment(db.Model):
+    """Track entry fee payments per player per cycle."""
+    __tablename__ = 'cycle_payments'
+
+    id = db.Column(db.Integer, primary_key=True)
+    player_id = db.Column(db.Integer, db.ForeignKey('players.id'), nullable=False, index=True)
+    cycle_number = db.Column(db.Integer, nullable=False, index=True)
+    paid_at = db.Column(db.Date, nullable=True)
+
+    # Unique constraint to prevent duplicate (player_id, cycle_number) pairs
+    __table_args__ = (
+        db.UniqueConstraint('player_id', 'cycle_number', name='uq_cycle_payment_player_cycle'),
+    )
+
+    # Relationships
+    player = db.relationship('Player', backref='cycle_payments')
+
+    def __repr__(self):
+        return f'<CyclePayment player={self.player_id} cycle={self.cycle_number} paid_at={self.paid_at}>'
+
+
 class ReminderSchedule(db.Model):
     __tablename__ = 'reminder_schedules'
     
