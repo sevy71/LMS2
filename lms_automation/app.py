@@ -90,7 +90,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from models import db, Player, Round, Fixture, Pick, PickToken, ReminderSchedule
+from models import db, Player, Round, Fixture, Pick, PickToken, ReminderSchedule, CyclePayment
 
 
 # Initialize db with app
@@ -816,6 +816,25 @@ def _ensure_minimum_schema():
             except Exception as e:
                 app.logger.warning(f'Could not create reminder_schedules: {e}')
 
+        # Create cycle_payments table if missing (for per-cycle payment tracking)
+        if not insp.has_table('cycle_payments'):
+            try:
+                CyclePayment.__table__.create(bind=engine)
+                app.logger.info('Created missing table cycle_payments')
+            except Exception as e:
+                app.logger.warning(f'Could not create cycle_payments: {e}')
+        else:
+            # Ensure unique constraint exists (best-effort; some DBs may fail if already present)
+            try:
+                db.session.execute(text(
+                    'CREATE UNIQUE INDEX IF NOT EXISTS uq_cycle_payment_player_cycle '
+                    'ON cycle_payments (player_id, cycle_number);'
+                ))
+                app.logger.info('Ensured unique index on cycle_payments(player_id, cycle_number)')
+            except Exception as e:
+                # Constraint may already exist or DB doesn't support IF NOT EXISTS
+                app.logger.debug(f'cycle_payments unique index note: {e}')
+
         db.session.commit()
 
     except (OperationalError, DatabaseError) as e:
@@ -1098,6 +1117,22 @@ def get_picks_grid_data():
         players = Player.query.order_by(Player.name).all()
         picks = Pick.query.all()
 
+        # Determine the cycle number for payment lookup
+        # Use selected_cycle if explicit, otherwise current_cycle
+        if cycle_filter == 'all':
+            payment_cycle = current_cycle  # Default to current cycle for "all" view
+        elif cycle_filter == 'current':
+            payment_cycle = current_cycle
+        else:
+            try:
+                payment_cycle = int(cycle_filter)
+            except ValueError:
+                payment_cycle = current_cycle
+
+        # Fetch cycle payments for the selected cycle
+        cycle_payments = CyclePayment.query.filter_by(cycle_number=payment_cycle).all()
+        cycle_payments_map = {cp.player_id: cp.paid_at for cp in cycle_payments}
+
         # Create mappings
         picks_map = {}
         results_map = {}
@@ -1157,11 +1192,14 @@ def get_picks_grid_data():
                 else:
                     player_picks[round_key] = None
 
+            # Get cycle-specific payment date
+            cycle_paid_at = cycle_payments_map.get(player.id)
+
             players_data.append({
                 'id': player.id,
                 'name': player.name,
                 'status': player.status,
-                'last_entry_fee_paid_at': player.last_entry_fee_paid_at.isoformat() if player.last_entry_fee_paid_at else None,
+                'cycle_paid_at': cycle_paid_at.isoformat() if cycle_paid_at else None,
                 'picks': player_picks
             })
 
@@ -1175,6 +1213,7 @@ def get_picks_grid_data():
             'players': players_data,
             'available_cycles': available_cycles,
             'current_cycle': current_round.cycle_number or 1 if current_round else 1,
+            'payment_cycle': payment_cycle,  # The cycle used for payment dates
             'cycle_filter': cycle_filter
         })
 
@@ -1182,10 +1221,18 @@ def get_picks_grid_data():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# DEPRECATED: This endpoint sets a global player-level payment date.
+# Use /api/admin/cycles/<cycle_number>/players/<player_id>/paid-date for per-cycle payments.
 @app.route('/api/admin/players/<int:player_id>/payment-date', methods=['POST'])
 @admin_required
 def update_player_payment_date(player_id):
-    """Update the last entry fee paid date for a player (admin bookkeeping only)."""
+    """DEPRECATED: Update the last entry fee paid date for a player (global, not per-cycle).
+
+    This endpoint is deprecated. Use the per-cycle endpoint instead:
+    POST /api/admin/cycles/<cycle_number>/players/<player_id>/paid-date
+    """
+    app.logger.warning(f'DEPRECATED endpoint called: /api/admin/players/{player_id}/payment-date. '
+                       'Use /api/admin/cycles/<cycle>/players/<player_id>/paid-date instead.')
     try:
         player = Player.query.get(player_id)
         if not player:
@@ -1203,7 +1250,6 @@ def update_player_payment_date(player_id):
             app.logger.info(f'Payment date cleared for player {player.name} (ID: {player_id})')
         else:
             # Parse and set the date
-            from datetime import datetime
             try:
                 parsed_date = datetime.strptime(date_value, '%Y-%m-%d').date()
                 player.last_entry_fee_paid_at = parsed_date
@@ -1221,6 +1267,68 @@ def update_player_payment_date(player_id):
     except Exception as e:
         db.session.rollback()
         app.logger.error(f'Error updating payment date for player {player_id}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin/cycles/<int:cycle_number>/players/<int:player_id>/paid-date', methods=['POST'])
+@admin_required
+def update_cycle_payment_date(cycle_number, player_id):
+    """Update the payment date for a player in a specific cycle (upsert behavior)."""
+    try:
+        # Validate player exists
+        player = Player.query.get(player_id)
+        if not player:
+            return jsonify({'success': False, 'error': 'Player not found'}), 404
+
+        # Validate cycle_number is positive
+        if cycle_number < 1:
+            return jsonify({'success': False, 'error': 'Invalid cycle number'}), 400
+
+        data = request.get_json()
+        if data is None:
+            return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
+
+        date_value = data.get('paid_at')
+
+        # Parse the date value
+        parsed_date = None
+        if date_value is not None and date_value != '':
+            try:
+                parsed_date = datetime.strptime(date_value, '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+        # Upsert: find existing or create new
+        cycle_payment = CyclePayment.query.filter_by(
+            player_id=player_id,
+            cycle_number=cycle_number
+        ).first()
+
+        if cycle_payment:
+            # Update existing
+            cycle_payment.paid_at = parsed_date
+            app.logger.info(f'Updated cycle {cycle_number} payment for {player.name} (ID: {player_id}) to {parsed_date}')
+        else:
+            # Create new
+            cycle_payment = CyclePayment(
+                player_id=player_id,
+                cycle_number=cycle_number,
+                paid_at=parsed_date
+            )
+            db.session.add(cycle_payment)
+            app.logger.info(f'Created cycle {cycle_number} payment for {player.name} (ID: {player_id}): {parsed_date}')
+
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'player_id': player_id,
+            'cycle_number': cycle_number,
+            'paid_at': cycle_payment.paid_at.isoformat() if cycle_payment.paid_at else None
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f'Error updating cycle payment for player {player_id} cycle {cycle_number}: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

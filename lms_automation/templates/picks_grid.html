@@ -520,6 +520,7 @@ let currentSort = 'progress';
 let currentView = 'player'; // 'player' | 'round'
 let currentRoundKey = null; // Round key for Round View (e.g., "C2-R3")
 let selectedCycle = 'current'; // Cycle filter value
+let paymentCycle = null; // The cycle number used for payment dates (from API response)
 let showAllMobileRounds = false; // player view compaction toggle
 let playerViewRoundFilter = null; // When set, Player View shows only this round column
 let eventListenersInitialized = false; // Prevent duplicate event bindings
@@ -544,6 +545,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.success) {
                     gridData = data;
                     selectedCycle = cycle;
+                    paymentCycle = data.payment_cycle || data.current_cycle || 1;
 
                     // Initialize cycle selector
                     initCycleSelector(data);
@@ -619,6 +621,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (newData.success) {
                     gridData = newData;
                     selectedCycle = cycle;
+                    paymentCycle = newData.payment_cycle || newData.current_cycle || 1;
 
                     // Re-init round selector with new rounds for this cycle
                     initRoundSelector(newData);
@@ -817,7 +820,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 gridHtml += '<div class="paid-cell group-header"></div>';
             }
 
-            const paidValue = player.last_entry_fee_paid_at || '';
+            const paidValue = player.cycle_paid_at || '';
             gridHtml += `<div class="paid-cell">
                 <input type="date" class="paid-date-input" data-player-id="${player.id}" value="${paidValue}">
             </div>`;
@@ -874,15 +877,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 const playerId = this.dataset.playerId;
                 const dateValue = this.value || null;
                 const inputEl = this;
+                const cycleNum = paymentCycle || 1;
 
                 // Visual feedback: saving
                 inputEl.classList.remove('saved', 'error');
                 inputEl.classList.add('saving');
 
-                fetch(`/api/admin/players/${playerId}/payment-date`, {
+                // POST to per-cycle endpoint
+                fetch(`/api/admin/cycles/${cycleNum}/players/${playerId}/paid-date`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ last_entry_fee_paid_at: dateValue })
+                    body: JSON.stringify({ paid_at: dateValue })
                 })
                 .then(response => response.json())
                 .then(data => {
