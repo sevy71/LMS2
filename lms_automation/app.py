@@ -4502,33 +4502,45 @@ def get_player_league_table(token):
 
 @app.route('/api/player/<token>/pick-history')
 def get_player_pick_history(token):
-    """API endpoint for player's pick history"""
+    """API endpoint for player's pick history (current cycle only)"""
     pick_token = PickToken.query.filter_by(token=token).first()
     if not pick_token:
         return jsonify({'success': False, 'error': 'Invalid token'}), 404
-    
+
     try:
         player = pick_token.player
-        picks = Pick.query.filter_by(player_id=player.id).join(Round).order_by(Round.round_number).all()
-        
+
+        # Get current cycle from active/pending round, or latest round
+        current_round = Round.query.filter(Round.status.in_(['active', 'pending'])).order_by(Round.id.desc()).first()
+        if not current_round:
+            current_round = Round.query.order_by(Round.id.desc()).first()
+        current_cycle = current_round.cycle_number or 1 if current_round else 1
+
+        # Only show picks from the current cycle (resets after rollover)
+        picks = Pick.query.filter_by(player_id=player.id).join(Round).filter(
+            Round.cycle_number == current_cycle
+        ).order_by(Round.round_number).all()
+
         pick_history = []
         for pick in picks:
-            round_info = Round.query.get(pick.round_id)
+            round_info = db.session.get(Round, pick.round_id)
             pick_history.append({
                 'round_number': round_info.round_number,
                 'pl_matchday': round_info.pl_matchday,
                 'team_picked': pick.team_picked,
                 'is_winner': pick.is_winner,
                 'timestamp': pick.timestamp.strftime('%Y-%m-%d %H:%M') if pick.timestamp else None,
-                'round_status': round_info.status
+                'round_status': round_info.status,
+                'cycle_number': round_info.cycle_number
             })
-        
+
         return jsonify({
             'success': True,
             'pick_history': pick_history,
-            'player_name': player.name
+            'player_name': player.name,
+            'current_cycle': current_cycle
         })
-    
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
