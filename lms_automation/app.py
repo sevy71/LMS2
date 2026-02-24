@@ -381,12 +381,24 @@ def fetch_upcoming_fixtures(horizon_days: int = 45) -> dict:
                 'error': None  # Not an error - just no fixtures
             }
 
-        # Sort by date and get the earliest matchday
-        upcoming.sort(key=lambda x: x['datetime'])
-        next_matchday = upcoming[0]['matchday']
-        earliest_date = upcoming[0]['date']
+        # Get matchdays already used in database to avoid duplicates
+        used_matchdays = {r.pl_matchday for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()}
+        app.logger.info(f"SEASON CHECK: Matchdays already used: {sorted(used_matchdays)}")
 
-        app.logger.info(f"SEASON CHECK: Found {len(upcoming)} upcoming fixtures, next matchday={next_matchday}, earliest={earliest_date}")
+        # Filter out already-used matchdays
+        upcoming_unused = [u for u in upcoming if u['matchday'] not in used_matchdays]
+
+        if not upcoming_unused:
+            app.logger.warning(f"SEASON CHECK: All upcoming matchdays already used, falling back to earliest")
+            # Fall back to earliest fixture even if matchday is used (edge case)
+            upcoming_unused = upcoming
+
+        # Sort by date and get the earliest UNUSED matchday
+        upcoming_unused.sort(key=lambda x: x['datetime'])
+        next_matchday = upcoming_unused[0]['matchday']
+        earliest_date = upcoming_unused[0]['date']
+
+        app.logger.info(f"SEASON CHECK: Found {len(upcoming)} upcoming fixtures, {len(upcoming_unused)} with unused matchdays, next matchday={next_matchday}, earliest={earliest_date}")
 
         return {
             'available': True,
