@@ -93,8 +93,9 @@
                 <!-- Pick History Tab -->
                 <div class="tab-pane fade" id="history" role="tabpanel">
                     <div class="card">
-                        <div class="card-header">
+                        <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="card-title mb-0">Your Pick History</h5>
+                            <small class="text-muted" id="cycleInfoBadge"></small>
                         </div>
                         <div class="card-body">
                             <div id="pickHistoryContainer">
@@ -221,10 +222,11 @@ async function loadPickHistory() {
     try {
         const response = await fetch(`/api/player/${playerToken}/pick-history`);
         const data = await response.json();
-        
+
         if (data.success) {
             dashboardData.pickHistory = data.pick_history;
-            renderPickHistory(data.pick_history);
+            dashboardData.currentCycle = data.current_cycle;
+            renderPickHistory(data.pick_history, data.current_cycle);
         } else {
             showError('pickHistoryContainer', 'Failed to load pick history');
         }
@@ -298,14 +300,20 @@ function renderLeagueTable(players) {
     container.innerHTML = html;
 }
 
-function renderPickHistory(picks) {
+function renderPickHistory(picks, currentCycle) {
     const container = document.getElementById('pickHistoryContainer');
-    
+    const cycleInfoBadge = document.getElementById('cycleInfoBadge');
+
+    // Show which cycle this history is for
+    if (cycleInfoBadge && currentCycle) {
+        cycleInfoBadge.innerHTML = `<span class="badge bg-primary">Current Game (Cycle ${currentCycle})</span>`;
+    }
+
     if (picks.length === 0) {
-        container.innerHTML = '<p class="text-muted">No picks made yet.</p>';
+        container.innerHTML = '<p class="text-muted">No picks made yet in this game. Your history resets when a new game starts after rollover.</p>';
         return;
     }
-    
+
     let html = `
         <div class="table-responsive">
             <table class="table table-sm">
@@ -320,11 +328,11 @@ function renderPickHistory(picks) {
                 </thead>
                 <tbody>
     `;
-    
+
     picks.forEach(pick => {
         let resultClass = 'pick-pending';
         let resultText = 'Pending';
-        
+
         if (pick.is_winner === true) {
             resultClass = 'pick-winner';
             resultText = '✓ Won';
@@ -332,7 +340,7 @@ function renderPickHistory(picks) {
             resultClass = 'pick-loser';
             resultText = '✗ Lost';
         }
-        
+
         html += `
             <tr>
                 <td><strong>R${pick.round_number}</strong></td>
@@ -343,7 +351,7 @@ function renderPickHistory(picks) {
             </tr>
         `;
     });
-    
+
     html += '</tbody></table></div>';
     container.innerHTML = html;
 }
