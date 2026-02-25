@@ -26,13 +26,20 @@
                 <div class="navbar-nav ms-auto">
                     <a class="nav-link" href="{{ url_for('rules') }}">Rules</a>
                 </div>
+            {% elif is_admin_page %}
+                <a class="navbar-brand" href="{{ url_for('admin_dashboard') }}">Last Man Standing</a>
+                <div class="navbar-nav ms-auto">
+                    <a class="nav-link" href="{{ url_for('admin_dashboard') }}">Dashboard</a>
+                    <a class="nav-link" href="{{ url_for('picks_grid') }}">Picks Grid</a>
+                    <a class="nav-link" href="{{ url_for('admin_statistics_page') }}">Statistics</a>
+                    <a class="nav-link" href="{{ url_for('admin_logout') }}">Logout</a>
+                </div>
             {% else %}
                 <a class="navbar-brand" href="{{ url_for('index') }}">Last Man Standing</a>
                 <div class="navbar-nav ms-auto">
                     <a class="nav-link" href="{{ url_for('index') }}">Home</a>
                     <a class="nav-link" href="{{ url_for('player_registration') }}">Join Game</a>
                     <a class="nav-link" href="{{ url_for('rules') }}">Rules</a>
-                    <a class="nav-link" href="{{ url_for('admin_dashboard') }}">Admin</a>
                 </div>
             {% endif %}
         </div>
