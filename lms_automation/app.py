@@ -1090,7 +1090,7 @@ def change_admin_password():
 @admin_required
 def picks_grid():
     """Display a grid of all player picks for all rounds."""
-    return render_template('picks_grid.html')
+    return render_template('picks_grid.html', is_admin_page=True)
 
 @app.route('/api/picks-grid-data')
 @admin_required
@@ -1353,7 +1353,7 @@ def index():
 def admin_dashboard():
     players = Player.query.all()
     current_round = get_current_active_round()
-    return render_template('admin_dashboard.html', players=players, current_round=current_round)
+    return render_template('admin_dashboard.html', players=players, current_round=current_round, is_admin_page=True)
 
 @app.route('/api/admin/current-round-picks-status')
 @admin_required
@@ -4809,7 +4809,7 @@ def reminders_dashboard():
                 cutoff_time = to_local(anchor - timedelta(hours=1))
     except Exception:
         pass
-    return render_template('reminders_dashboard.html', current_round=current_round, first_kickoff=first_kickoff, cutoff_time=cutoff_time)
+    return render_template('reminders_dashboard.html', current_round=current_round, first_kickoff=first_kickoff, cutoff_time=cutoff_time, is_admin_page=True)
 
 @app.route('/admin/statistics')
 @admin_required
@@ -4883,10 +4883,11 @@ def admin_statistics_page():
             'admin_statistics.html',
             competition_stats=competition_stats,
             player_stats=player_stats,
-            pick_history=pick_history
+            pick_history=pick_history,
+            is_admin_page=True
         )
     except Exception as e:
-        return render_template('admin_statistics.html', error=str(e), competition_stats={}, player_stats=[], pick_history=[]), 500
+        return render_template('admin_statistics.html', error=str(e), competition_stats={}, player_stats=[], pick_history=[], is_admin_page=True), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
