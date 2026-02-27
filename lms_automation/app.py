@@ -4628,14 +4628,18 @@ class WhatsAppReminder:
             delta = target - datetime.utcnow()
             total_minutes = int(delta.total_seconds() // 60)
             if total_minutes <= 0:
-                return "moments"
+                return None  # Cutoff has passed
+            if total_minutes < 5:
+                return "just a few minutes"
+            if total_minutes < 15:
+                return f"{total_minutes} minutes"
             hours, minutes = divmod(total_minutes, 60)
             parts = []
             if hours:
                 parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
             if minutes:
                 parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
-            return " ".join(parts) if parts else "minutes"
+            return " ".join(parts) if parts else None
 
         time_remaining = _format_time_remaining(cutoff_time)
 
@@ -4650,30 +4654,30 @@ class WhatsAppReminder:
             base_url = base_url.replace('http://', 'https://')
         if not base_url.startswith(('http://', 'https://')):
             base_url = f"https://{base_url}"
-        
+
         pick_url = pick_token.get_pick_url(base_url)
         dashboard_url = f"{base_url}/dashboard/{pick_token.token}"
-        
+
         # Customize message based on reminder type
         if reminder_type == '4_hour':
-            urgency = "⏰ Reminder"
+            urgency = "⏰ 4 Hour Reminder"
         elif reminder_type == '2_hour':
-            urgency = "⏰ Reminder"
+            urgency = "🚨 2 Hour Reminder"
         else:
             urgency = "📝 Reminder"
 
         if time_remaining:
-            time_msg = f"You have about {time_remaining} before the pick window closes (1 hour before kickoff)."
+            time_msg = f"You have about {time_remaining} left to submit your pick for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday})."
         else:
-            time_msg = "Don't forget to submit your pick before the cutoff."
+            time_msg = f"Time is running out to submit your pick for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday})!"
         
         message = f"""{urgency}
 
 Hi {player.name}! 👋
 
-{time_msg} to submit your pick for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday}).
+{time_msg}
 
-Haven't picked yet? Don't get eliminated! 
+Haven't picked yet? Don't get eliminated!
 
 🎯 Make your pick: {pick_url}
 
