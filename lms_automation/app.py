@@ -4638,9 +4638,16 @@ class WhatsAppReminder:
             return " ".join(parts) if parts else "minutes"
 
         time_remaining = _format_time_remaining(cutoff_time)
-            
-        # Get base URL
-        base_url = os.environ.get('BASE_URL', 'https://localhost:5000')
+
+        # Get base URL - use request context if available, otherwise fall back to env var
+        try:
+            base_url = os.environ.get('BASE_URL') or request.url_root.rstrip('/')
+        except RuntimeError:
+            # Outside request context
+            base_url = os.environ.get('BASE_URL', 'https://web-production-c715.up.railway.app')
+        # Ensure HTTPS for production
+        if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
+            base_url = base_url.replace('http://', 'https://')
         if not base_url.startswith(('http://', 'https://')):
             base_url = f"https://{base_url}"
         
@@ -4675,13 +4682,13 @@ Haven't picked yet? Don't get eliminated!
 Good luck! 🍀
 Last Man Standing"""
         
-        # Generate WhatsApp link (prefer WhatsApp Web on desktop per request)
+        # Generate WhatsApp link using api.whatsapp.com (works on both mobile and desktop)
         encoded_message = message.replace('\n', '%0A').replace(' ', '%20')
         # Sanitize and clean the number (remove spaces, dashes, then remove +)
         sanitized_number = sanitize_phone_number(player.whatsapp_number)
         clean_number = sanitized_number.replace('+', '')
-        # Use WhatsApp Web as default so it opens in the browser
-        whatsapp_link = f"https://web.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
+        # Use api.whatsapp.com which opens the WhatsApp app on mobile or prompts on desktop
+        whatsapp_link = f"https://api.whatsapp.com/send?phone={clean_number}&text={encoded_message}"
         
         return {
             'player_name': player.name,
