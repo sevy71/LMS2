@@ -2529,14 +2529,49 @@ function attachPlayerEventListeners() {
     // FIXTURE RECOVERY HANDLERS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Premier League teams for dropdowns
-    const PL_TEAMS = [
-        "Arsenal", "Aston Villa", "Bournemouth", "Brentford", "Brighton",
-        "Chelsea", "Crystal Palace", "Everton", "Fulham", "Ipswich Town",
-        "Leicester City", "Liverpool", "Manchester City", "Manchester United",
-        "Newcastle United", "Nottingham Forest", "Southampton", "Tottenham Hotspur",
-        "West Ham United", "Wolverhampton Wanderers"
+    // Premier League teams for dropdowns (loaded dynamically from API)
+    let PL_TEAMS = [];
+    let teamsLoaded = false;
+
+    // Fallback team list in case API fails
+    const FALLBACK_TEAMS = [
+        "Arsenal FC", "Aston Villa FC", "AFC Bournemouth", "Brentford FC",
+        "Brighton & Hove Albion FC", "Chelsea FC", "Crystal Palace FC",
+        "Everton FC", "Fulham FC", "Ipswich Town FC", "Leicester City FC",
+        "Liverpool FC", "Manchester City FC", "Manchester United FC",
+        "Newcastle United FC", "Nottingham Forest FC", "Southampton FC",
+        "Tottenham Hotspur FC", "West Ham United FC", "Wolverhampton Wanderers FC"
     ];
+
+    // Fetch teams from API
+    async function loadPremierLeagueTeams() {
+        if (teamsLoaded && PL_TEAMS.length > 0) {
+            return PL_TEAMS;
+        }
+
+        try {
+            const response = await fetch('/api/premier-league-teams');
+            const data = await response.json();
+
+            if (data.teams && data.teams.length > 0) {
+                PL_TEAMS = data.teams;
+                teamsLoaded = true;
+                console.log(`Loaded ${PL_TEAMS.length} teams from ${data.source}`);
+                return PL_TEAMS;
+            }
+        } catch (error) {
+            console.error('Failed to load teams from API:', error);
+        }
+
+        // Use fallback if API fails
+        console.warn('Using fallback team list');
+        PL_TEAMS = FALLBACK_TEAMS;
+        teamsLoaded = true;
+        return PL_TEAMS;
+    }
+
+    // Load teams on page load
+    loadPremierLeagueTeams();
 
     // Retry Auto Load Fixtures button handler
     const retryFixturesBtn = document.getElementById('retryFixturesBtn');
@@ -2635,13 +2670,18 @@ function attachPlayerEventListeners() {
         }
 
         // Modal show event
-        manualFixturesModal.addEventListener('show.bs.modal', function(event) {
+        manualFixturesModal.addEventListener('show.bs.modal', async function(event) {
             const button = event.relatedTarget;
             const roundId = button ? button.getAttribute('data-round-id') : '';
             document.getElementById('manualFixturesRoundId').value = roundId;
 
-            // Clear and add initial rows
+            // Ensure teams are loaded before populating dropdowns
             const container = document.getElementById('fixtureRowsContainer');
+            container.innerHTML = '<div class="text-center py-3"><i class="fas fa-spinner fa-spin"></i> Loading teams...</div>';
+
+            await loadPremierLeagueTeams();
+
+            // Clear and add initial rows
             container.innerHTML = '';
             fixtureRowCount = 0;
 

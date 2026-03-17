@@ -2741,17 +2741,80 @@ def add_manual_fixtures(round_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Cache for Premier League teams (refreshes on app restart or after 24 hours)
+_pl_teams_cache = {
+    'teams': None,
+    'fetched_at': None
+}
+
 @app.route('/api/premier-league-teams', methods=['GET'])
 def get_premier_league_teams():
-    """Return list of Premier League teams for fixture entry dropdowns."""
-    teams = [
-        "Arsenal", "Aston Villa", "Bournemouth", "Brentford", "Brighton",
-        "Chelsea", "Crystal Palace", "Everton", "Fulham", "Ipswich Town",
-        "Leicester City", "Liverpool", "Manchester City", "Manchester United",
-        "Newcastle United", "Nottingham Forest", "Southampton", "Tottenham Hotspur",
-        "West Ham United", "Wolverhampton Wanderers"
+    """Return list of Premier League teams for fixture entry dropdowns.
+
+    Fetches teams dynamically from the football API and caches for 24 hours.
+    Falls back to cached/static list if API fails.
+    """
+    global _pl_teams_cache
+
+    # Check if cache is valid (less than 24 hours old)
+    cache_valid = False
+    if _pl_teams_cache['teams'] and _pl_teams_cache['fetched_at']:
+        cache_age = datetime.utcnow() - _pl_teams_cache['fetched_at']
+        cache_valid = cache_age.total_seconds() < 86400  # 24 hours
+
+    # Force refresh if requested
+    force_refresh = request.args.get('refresh', '').lower() in ('1', 'true', 'yes')
+
+    if cache_valid and not force_refresh:
+        return jsonify({
+            'teams': _pl_teams_cache['teams'],
+            'source': 'cache',
+            'cached_at': _pl_teams_cache['fetched_at'].isoformat()
+        })
+
+    # Fetch from API
+    try:
+        from football_api import FootballDataAPI
+        api = FootballDataAPI()
+        teams = api.get_season_teams(season='2025')
+
+        if teams:
+            _pl_teams_cache['teams'] = teams
+            _pl_teams_cache['fetched_at'] = datetime.utcnow()
+            app.logger.info(f"PL TEAMS: Fetched {len(teams)} teams from API")
+
+            return jsonify({
+                'teams': teams,
+                'source': 'api',
+                'fetched_at': _pl_teams_cache['fetched_at'].isoformat()
+            })
+
+    except Exception as e:
+        app.logger.warning(f"PL TEAMS: API fetch failed: {e}")
+
+    # Fallback to cache if available
+    if _pl_teams_cache['teams']:
+        app.logger.info("PL TEAMS: Using cached team list")
+        return jsonify({
+            'teams': _pl_teams_cache['teams'],
+            'source': 'cache_fallback',
+            'cached_at': _pl_teams_cache['fetched_at'].isoformat() if _pl_teams_cache['fetched_at'] else None
+        })
+
+    # Ultimate fallback to static list
+    app.logger.warning("PL TEAMS: Using static fallback list")
+    fallback_teams = [
+        "Arsenal FC", "Aston Villa FC", "AFC Bournemouth", "Brentford FC",
+        "Brighton & Hove Albion FC", "Chelsea FC", "Crystal Palace FC",
+        "Everton FC", "Fulham FC", "Ipswich Town FC", "Leicester City FC",
+        "Liverpool FC", "Manchester City FC", "Manchester United FC",
+        "Newcastle United FC", "Nottingham Forest FC", "Southampton FC",
+        "Tottenham Hotspur FC", "West Ham United FC", "Wolverhampton Wanderers FC"
     ]
-    return jsonify({'teams': teams})
+    return jsonify({
+        'teams': fallback_teams,
+        'source': 'static_fallback'
+    })
 
 
 @app.route('/api/rounds/<int:round_id>/picks')

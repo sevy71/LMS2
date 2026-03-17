@@ -217,3 +217,50 @@ class FootballDataAPI:
                 'earliest_date': None,
                 'latest_date': None
             }
+
+    def get_season_teams(self, season: str = None) -> List[str]:
+        """
+        Get list of teams participating in the current season.
+
+        Extracts unique team names from all fixtures in the season.
+
+        Args:
+            season: Season year (defaults to current season)
+
+        Returns:
+            Sorted list of team names
+        """
+        try:
+            fixtures_data = self.get_premier_league_fixtures(season=season)
+            teams = set()
+
+            for match in fixtures_data.get('matches', []):
+                home_team = match.get('homeTeam', {}).get('name')
+                away_team = match.get('awayTeam', {}).get('name')
+
+                if home_team and home_team != 'TBD':
+                    teams.add(home_team)
+                if away_team and away_team != 'TBD':
+                    teams.add(away_team)
+
+            if teams:
+                return sorted(list(teams))
+
+            # Fallback if no teams found
+            print("Warning: No teams found from API, using fallback list")
+            return self._get_fallback_teams()
+
+        except Exception as e:
+            print(f"Error getting season teams: {e}")
+            return self._get_fallback_teams()
+
+    def _get_fallback_teams(self) -> List[str]:
+        """Return fallback team list for 2025/26 season."""
+        return [
+            "Arsenal FC", "Aston Villa FC", "AFC Bournemouth", "Brentford FC",
+            "Brighton & Hove Albion FC", "Chelsea FC", "Crystal Palace FC",
+            "Everton FC", "Fulham FC", "Ipswich Town FC", "Leicester City FC",
+            "Liverpool FC", "Manchester City FC", "Manchester United FC",
+            "Newcastle United FC", "Nottingham Forest FC", "Southampton FC",
+            "Tottenham Hotspur FC", "West Ham United FC", "Wolverhampton Wanderers FC"
+        ]
