@@ -2081,11 +2081,20 @@ def handle_rounds():
 
                 if not is_valid:
                     app.logger.error(f"FIXTURE VALIDATION FAILED: Round {new_round.id} (Matchday {pl_matchday}) → {reason}")
-                    db.session.rollback()
+                    # Create round but mark as WAITING_FOR_FIXTURES (don't attach bad fixtures)
+                    new_round.status = 'pending'
+                    new_round.special_measure = 'WAITING_FOR_FIXTURES'
+                    new_round.special_note = f'Fixture validation failed: {reason}'
+                    db.session.commit()
                     return jsonify({
-                        'success': False,
-                        'error': f'Fixture validation failed: {reason}. Use manual fixture entry if needed.'
-                    }), 400
+                        'success': True,
+                        'id': new_round.id,
+                        'round_number': new_round.round_number,
+                        'pl_matchday': new_round.pl_matchday,
+                        'fixtures_added': 0,
+                        'warning': f'Round created but fixtures invalid: {reason}. Use "Retry Auto Load" or manual entry.',
+                        'waiting_for_fixtures': True
+                    })
 
                 if formatted_fixtures:
                     # Create fixture records from API data
@@ -2128,39 +2137,21 @@ def handle_rounds():
                     raise Exception("No fixtures returned from API")
                 
             except Exception as fixture_error:
-                print(f"API failed, creating fallback fixtures: {fixture_error}")
-                # Create fallback Premier League fixtures for the round
-                fallback_fixtures = [
-                    ("Arsenal", "Chelsea"), ("Liverpool", "Manchester City"), 
-                    ("Manchester United", "Tottenham"), ("Newcastle", "Brighton"),
-                    ("Aston Villa", "West Ham"), ("Crystal Palace", "Everton"),
-                    ("Fulham", "Brentford"), ("Wolves", "Nottingham Forest"),
-                    ("Bournemouth", "Sheffield United"), ("Burnley", "Luton Town")
-                ]
-                
-                for i, (home_team, away_team) in enumerate(fallback_fixtures):
-                    fixture = Fixture(
-                        round_id=new_round.id,
-                        event_id=f"fallback_{new_round.id}_{i}",
-                        home_team=home_team,
-                        away_team=away_team,
-                        date=None,
-                        time=None,
-                        home_score=None,
-                        away_score=None,
-                        status='scheduled'
-                    )
-                    db.session.add(fixture)
-                
+                app.logger.error(f"FIXTURE LOAD FAILED: Round {new_round.id} (Matchday {pl_matchday}) → {fixture_error}")
+                # Mark round as WAITING_FOR_FIXTURES instead of using fallback fixtures
+                new_round.status = 'pending'
+                new_round.special_measure = 'WAITING_FOR_FIXTURES'
+                new_round.special_note = f'API fixture loading failed: {fixture_error}'
                 db.session.commit()
-                
+
                 return jsonify({
-                    'success': True, 
-                    'id': new_round.id, 
+                    'success': True,
+                    'id': new_round.id,
                     'round_number': new_round.round_number,
                     'pl_matchday': new_round.pl_matchday,
-                    'fixtures_added': len(fallback_fixtures),
-                    'warning': f'Round created with fallback fixtures (API failed): {str(fixture_error)}'
+                    'fixtures_added': 0,
+                    'warning': f'Round created but fixture loading failed: {str(fixture_error)}. Use "Retry Auto Load" or manual entry.',
+                    'waiting_for_fixtures': True
                 })
             
         except Exception as e:
@@ -2518,6 +2509,250 @@ def add_fixtures_to_round(round_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/rounds/<int:round_id>/retry-fixtures', methods=['POST'])
+@admin_required
+def retry_load_fixtures(round_id):
+    """Retry loading fixtures for a round that is WAITING_FOR_FIXTURES.
+
+    This endpoint:
+    1. Clears any existing fixtures
+    2. Fetches fresh fixtures from API
+    3. Validates them
+    4. If valid: attaches fixtures and sets status to 'pending'
+    5. If invalid: returns error (round stays in WAITING_FOR_FIXTURES)
+    """
+    try:
+        round_obj = Round.query.get_or_404(round_id)
+
+        # Only allow retry for rounds waiting for fixtures
+        if round_obj.special_measure != 'WAITING_FOR_FIXTURES':
+            return jsonify({
+                'success': False,
+                'error': f'Round is not waiting for fixtures (status: {round_obj.status}, special_measure: {round_obj.special_measure})'
+            }), 400
+
+        if not round_obj.pl_matchday:
+            return jsonify({
+                'success': False,
+                'error': 'Round has no PL matchday set. Cannot fetch fixtures.'
+            }), 400
+
+        # Clear any existing fixtures
+        existing_count = Fixture.query.filter_by(round_id=round_id).delete()
+        if existing_count > 0:
+            app.logger.info(f"RETRY FIXTURES: Cleared {existing_count} existing fixtures for Round {round_obj.id}")
+
+        # Fetch fresh fixtures from API
+        from football_api import FootballDataAPI
+        api = FootballDataAPI()
+        fixtures_data = api.get_premier_league_fixtures(round_obj.pl_matchday)
+        formatted_fixtures = api.format_fixtures_for_db(fixtures_data, round_obj.pl_matchday)
+
+        # Validate fixtures
+        now_utc = datetime.utcnow()
+        is_valid, reason = validate_fixtures(formatted_fixtures, now_utc)
+
+        if not is_valid:
+            app.logger.error(f"RETRY FIXTURES FAILED: Round {round_obj.id} (Matchday {round_obj.pl_matchday}) → {reason}")
+            db.session.rollback()
+            return jsonify({
+                'success': False,
+                'error': f'Fixture validation failed: {reason}',
+                'suggestion': 'Try again later or use manual fixture entry.'
+            }), 400
+
+        # Fixtures valid - attach them
+        earliest_kickoff = None
+        for fixture_data in formatted_fixtures:
+            fixture = Fixture(
+                round_id=round_obj.id,
+                event_id=fixture_data['event_id'],
+                home_team=fixture_data['home_team'],
+                away_team=fixture_data['away_team'],
+                date=fixture_data['date'],
+                time=fixture_data['time'],
+                home_score=fixture_data['home_score'],
+                away_score=fixture_data['away_score'],
+                status=fixture_data['status']
+            )
+            db.session.add(fixture)
+
+            # Track earliest kickoff
+            if fixture_data['date'] and fixture_data['time']:
+                try:
+                    dt = datetime.combine(fixture_data['date'], fixture_data['time'])
+                    if earliest_kickoff is None or dt < earliest_kickoff:
+                        earliest_kickoff = dt
+                except Exception:
+                    pass
+
+        # Update round status
+        if earliest_kickoff:
+            round_obj.first_kickoff_at = earliest_kickoff
+        round_obj.special_measure = None
+        round_obj.special_note = None
+        round_obj.status = 'pending'
+
+        db.session.commit()
+
+        app.logger.info(f"RETRY FIXTURES SUCCESS: Round {round_obj.id} loaded {len(formatted_fixtures)} fixtures")
+
+        return jsonify({
+            'success': True,
+            'fixtures_added': len(formatted_fixtures),
+            'first_kickoff_at': earliest_kickoff.isoformat() if earliest_kickoff else None,
+            'message': f'Successfully loaded {len(formatted_fixtures)} fixtures. Round is now ready.'
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"RETRY FIXTURES ERROR: Round {round_id} → {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/rounds/<int:round_id>/manual-fixtures', methods=['POST'])
+@admin_required
+def add_manual_fixtures(round_id):
+    """Add fixtures manually for a round.
+
+    Expected payload:
+    {
+        "fixtures": [
+            {"home_team": "Arsenal", "away_team": "Chelsea", "date": "2024-01-15", "time": "15:00"},
+            ...
+        ],
+        "clear_existing": true/false (optional, default false)
+    }
+    """
+    try:
+        round_obj = Round.query.get_or_404(round_id)
+        data = request.get_json()
+
+        fixtures_data = data.get('fixtures', [])
+        clear_existing = data.get('clear_existing', False)
+
+        if not fixtures_data:
+            return jsonify({'success': False, 'error': 'No fixtures provided'}), 400
+
+        # Validate fixture count
+        if len(fixtures_data) < 6:
+            return jsonify({'success': False, 'error': f'Too few fixtures ({len(fixtures_data)}). Minimum 6 required.'}), 400
+        if len(fixtures_data) > 12:
+            return jsonify({'success': False, 'error': f'Too many fixtures ({len(fixtures_data)}). Maximum 12 allowed.'}), 400
+
+        # Clear existing fixtures if requested
+        if clear_existing:
+            existing_count = Fixture.query.filter_by(round_id=round_id).delete()
+            if existing_count > 0:
+                app.logger.info(f"MANUAL FIXTURES: Cleared {existing_count} existing fixtures for Round {round_obj.id}")
+        else:
+            # Check if round already has fixtures
+            existing_count = Fixture.query.filter_by(round_id=round_id).count()
+            if existing_count > 0:
+                return jsonify({
+                    'success': False,
+                    'error': f'Round already has {existing_count} fixtures. Set clear_existing=true to replace them.'
+                }), 400
+
+        # Add fixtures
+        earliest_kickoff = None
+        fixtures_added = 0
+
+        for i, fx_data in enumerate(fixtures_data):
+            home_team = fx_data.get('home_team', '').strip()
+            away_team = fx_data.get('away_team', '').strip()
+
+            if not home_team or not away_team:
+                return jsonify({
+                    'success': False,
+                    'error': f'Fixture {i+1}: home_team and away_team are required'
+                }), 400
+
+            # Parse date and time
+            fx_date = None
+            fx_time = None
+
+            if fx_data.get('date'):
+                try:
+                    fx_date = datetime.strptime(fx_data['date'], '%Y-%m-%d').date()
+                except ValueError:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Fixture {i+1}: Invalid date format. Use YYYY-MM-DD'
+                    }), 400
+
+            if fx_data.get('time'):
+                try:
+                    fx_time = datetime.strptime(fx_data['time'], '%H:%M').time()
+                except ValueError:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Fixture {i+1}: Invalid time format. Use HH:MM'
+                    }), 400
+
+            fixture = Fixture(
+                round_id=round_obj.id,
+                event_id=f"manual_{round_obj.id}_{i}",
+                home_team=home_team,
+                away_team=away_team,
+                date=fx_date,
+                time=fx_time,
+                home_score=None,
+                away_score=None,
+                status='scheduled'
+            )
+            db.session.add(fixture)
+            fixtures_added += 1
+
+            # Track earliest kickoff
+            if fx_date and fx_time:
+                try:
+                    dt = datetime.combine(fx_date, fx_time)
+                    if earliest_kickoff is None or dt < earliest_kickoff:
+                        earliest_kickoff = dt
+                except Exception:
+                    pass
+
+        # Update round
+        if earliest_kickoff:
+            round_obj.first_kickoff_at = earliest_kickoff
+
+        # Clear WAITING_FOR_FIXTURES if it was set
+        if round_obj.special_measure == 'WAITING_FOR_FIXTURES':
+            round_obj.special_measure = None
+            round_obj.special_note = None
+
+        db.session.commit()
+
+        app.logger.info(f"MANUAL FIXTURES SUCCESS: Round {round_obj.id} added {fixtures_added} fixtures")
+
+        return jsonify({
+            'success': True,
+            'fixtures_added': fixtures_added,
+            'first_kickoff_at': earliest_kickoff.isoformat() if earliest_kickoff else None,
+            'message': f'Successfully added {fixtures_added} fixtures manually.'
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"MANUAL FIXTURES ERROR: Round {round_id} → {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/premier-league-teams', methods=['GET'])
+def get_premier_league_teams():
+    """Return list of Premier League teams for fixture entry dropdowns."""
+    teams = [
+        "Arsenal", "Aston Villa", "Bournemouth", "Brentford", "Brighton",
+        "Chelsea", "Crystal Palace", "Everton", "Fulham", "Ipswich Town",
+        "Leicester City", "Liverpool", "Manchester City", "Manchester United",
+        "Newcastle United", "Nottingham Forest", "Southampton", "Tottenham Hotspur",
+        "West Ham United", "Wolverhampton Wanderers"
+    ]
+    return jsonify({'teams': teams})
+
 
 @app.route('/api/rounds/<int:round_id>/picks')
 @admin_required

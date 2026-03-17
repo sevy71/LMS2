@@ -73,6 +73,36 @@
                         </div>
                     {% endif %}
 
+                    <!-- WAITING_FOR_FIXTURES warning -->
+                    {% if current_round.special_measure == 'WAITING_FOR_FIXTURES' %}
+                        <div class="alert alert-warning mt-3" role="alert">
+                            <div class="d-flex align-items-start">
+                                <i class="fas fa-exclamation-triangle fa-2x me-3 text-warning"></i>
+                                <div class="flex-grow-1">
+                                    <h5 class="alert-heading mb-2">Fixtures could not be loaded automatically</h5>
+                                    <p class="mb-2 small">
+                                        {% if current_round.special_note %}
+                                            {{ current_round.special_note }}
+                                        {% else %}
+                                            The fixture API returned invalid data. You can retry or add fixtures manually.
+                                        {% endif %}
+                                    </p>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button class="btn btn-warning btn-sm" id="retryFixturesBtn" data-round-id="{{ current_round.id }}">
+                                            <i class="fas fa-sync-alt me-1"></i>Retry Auto Load
+                                        </button>
+                                        <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#manualFixturesModal" data-round-id="{{ current_round.id }}">
+                                            <i class="fas fa-edit me-1"></i>Add Fixtures Manually
+                                        </button>
+                                        <a href="https://www.sofascore.com/tournament/football/england/premier-league/17" target="_blank" class="btn btn-outline-secondary btn-sm">
+                                            <i class="fas fa-external-link-alt me-1"></i>View on SofaScore
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {% endif %}
+
                     <!-- Picks submission status -->
                     <div id="picksStatus" class="mt-3"></div>
                 {% else %}
@@ -1083,9 +1113,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     </select>
                     <div class="form-text">Select a round that needs fixtures added</div>
                 </div>
-                
+
                 <div id="fixtureRoundInfo" class="mt-3"></div>
-                
+
                 <div class="alert alert-info">
                     <strong>What will happen:</strong><br>
                     • Fixtures will be fetched from the Premier League API<br>
@@ -1096,6 +1126,53 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" id="confirmAddFixturesBtn" disabled>Add Fixtures</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Manual Fixtures Modal -->
+<div class="modal fade" id="manualFixturesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title"><i class="fas fa-edit me-2"></i>Add Fixtures Manually</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info mb-3">
+                    <i class="fas fa-info-circle me-2"></i>
+                    Add between 6-12 fixtures. All fixtures must have home team, away team, date, and time.
+                </div>
+
+                <input type="hidden" id="manualFixturesRoundId" value="">
+
+                <div id="fixtureRowsContainer">
+                    <!-- Fixture rows will be added dynamically -->
+                </div>
+
+                <div class="d-flex gap-2 mt-3">
+                    <button type="button" class="btn btn-outline-success btn-sm" id="addFixtureRowBtn">
+                        <i class="fas fa-plus me-1"></i>Add Fixture
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" id="addAllTeamsBtn">
+                        <i class="fas fa-futbol me-1"></i>Add All 10 Matches
+                    </button>
+                </div>
+
+                <div class="mt-3">
+                    <small class="text-muted">
+                        <i class="fas fa-lightbulb me-1"></i>
+                        Tip: Check <a href="https://www.sofascore.com/tournament/football/england/premier-league/17" target="_blank">SofaScore</a>
+                        for accurate fixture times.
+                    </small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="saveManualFixturesBtn" disabled>
+                    <i class="fas fa-save me-1"></i>Save Fixtures
+                </button>
             </div>
         </div>
     </div>
@@ -2442,10 +2519,255 @@ function attachPlayerEventListeners() {
         document.getElementById('eliminatedCount').textContent = eliminated;
         document.getElementById('survivingCount').textContent = surviving;
         document.getElementById('downloadFileBtn').href = `/download-export/${filename}`;
-        
+
         // Show modal
         const bsModal = new bootstrap.Modal(modal);
         bsModal.show();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FIXTURE RECOVERY HANDLERS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Premier League teams for dropdowns
+    const PL_TEAMS = [
+        "Arsenal", "Aston Villa", "Bournemouth", "Brentford", "Brighton",
+        "Chelsea", "Crystal Palace", "Everton", "Fulham", "Ipswich Town",
+        "Leicester City", "Liverpool", "Manchester City", "Manchester United",
+        "Newcastle United", "Nottingham Forest", "Southampton", "Tottenham Hotspur",
+        "West Ham United", "Wolverhampton Wanderers"
+    ];
+
+    // Retry Auto Load Fixtures button handler
+    const retryFixturesBtn = document.getElementById('retryFixturesBtn');
+    if (retryFixturesBtn) {
+        retryFixturesBtn.addEventListener('click', async function() {
+            const roundId = this.getAttribute('data-round-id');
+            if (!roundId) return;
+
+            const btn = this;
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Loading...';
+
+            try {
+                const response = await fetch(`/api/rounds/${roundId}/retry-fixtures`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(`Success! Loaded ${data.fixtures_added} fixtures.\n\n${data.message}`);
+                    location.reload();
+                } else {
+                    alert(`Failed to load fixtures:\n\n${data.error}\n\n${data.suggestion || 'Try manual entry instead.'}`);
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        });
+    }
+
+    // Manual Fixtures Modal handlers
+    const manualFixturesModal = document.getElementById('manualFixturesModal');
+    if (manualFixturesModal) {
+        let fixtureRowCount = 0;
+
+        // Create team dropdown options HTML
+        function getTeamOptionsHtml(selectedTeam = '') {
+            let html = '<option value="">Select team...</option>';
+            PL_TEAMS.forEach(team => {
+                const selected = team === selectedTeam ? 'selected' : '';
+                html += `<option value="${team}" ${selected}>${team}</option>`;
+            });
+            return html;
+        }
+
+        // Create a fixture row
+        function createFixtureRow(index, homeTeam = '', awayTeam = '', date = '', time = '') {
+            const defaultDate = date || new Date().toISOString().split('T')[0];
+            const defaultTime = time || '15:00';
+
+            return `
+                <div class="fixture-row card mb-2" data-index="${index}">
+                    <div class="card-body py-2 px-3">
+                        <div class="row align-items-center g-2">
+                            <div class="col-md-3">
+                                <select class="form-select form-select-sm home-team" required>
+                                    ${getTeamOptionsHtml(homeTeam)}
+                                </select>
+                            </div>
+                            <div class="col-auto text-center">
+                                <span class="text-muted">vs</span>
+                            </div>
+                            <div class="col-md-3">
+                                <select class="form-select form-select-sm away-team" required>
+                                    ${getTeamOptionsHtml(awayTeam)}
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <input type="date" class="form-control form-control-sm fixture-date" value="${defaultDate}" required>
+                            </div>
+                            <div class="col-md-2">
+                                <input type="time" class="form-control form-control-sm fixture-time" value="${defaultTime}" required>
+                            </div>
+                            <div class="col-auto">
+                                <button type="button" class="btn btn-outline-danger btn-sm remove-fixture-btn" title="Remove">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Update save button state
+        function updateSaveButtonState() {
+            const rows = document.querySelectorAll('.fixture-row');
+            const saveBtn = document.getElementById('saveManualFixturesBtn');
+            saveBtn.disabled = rows.length < 6;
+        }
+
+        // Modal show event
+        manualFixturesModal.addEventListener('show.bs.modal', function(event) {
+            const button = event.relatedTarget;
+            const roundId = button ? button.getAttribute('data-round-id') : '';
+            document.getElementById('manualFixturesRoundId').value = roundId;
+
+            // Clear and add initial rows
+            const container = document.getElementById('fixtureRowsContainer');
+            container.innerHTML = '';
+            fixtureRowCount = 0;
+
+            // Add 6 empty rows to start
+            for (let i = 0; i < 6; i++) {
+                container.insertAdjacentHTML('beforeend', createFixtureRow(fixtureRowCount++));
+            }
+            updateSaveButtonState();
+        });
+
+        // Add fixture row button
+        document.getElementById('addFixtureRowBtn').addEventListener('click', function() {
+            const container = document.getElementById('fixtureRowsContainer');
+            const rows = container.querySelectorAll('.fixture-row');
+            if (rows.length >= 12) {
+                alert('Maximum 12 fixtures allowed');
+                return;
+            }
+            container.insertAdjacentHTML('beforeend', createFixtureRow(fixtureRowCount++));
+            updateSaveButtonState();
+        });
+
+        // Add all 10 matches button
+        document.getElementById('addAllTeamsBtn').addEventListener('click', function() {
+            const container = document.getElementById('fixtureRowsContainer');
+            container.innerHTML = '';
+            fixtureRowCount = 0;
+
+            // Create 10 rows with teams pre-selected in pairs
+            const teamPairs = [];
+            const shuffledTeams = [...PL_TEAMS].sort(() => Math.random() - 0.5);
+            for (let i = 0; i < 20; i += 2) {
+                teamPairs.push([shuffledTeams[i], shuffledTeams[i + 1]]);
+            }
+
+            teamPairs.forEach(([home, away]) => {
+                container.insertAdjacentHTML('beforeend', createFixtureRow(fixtureRowCount++, home, away));
+            });
+            updateSaveButtonState();
+        });
+
+        // Remove fixture row (delegated event)
+        document.getElementById('fixtureRowsContainer').addEventListener('click', function(e) {
+            if (e.target.closest('.remove-fixture-btn')) {
+                const row = e.target.closest('.fixture-row');
+                if (row) {
+                    row.remove();
+                    updateSaveButtonState();
+                }
+            }
+        });
+
+        // Save manual fixtures
+        document.getElementById('saveManualFixturesBtn').addEventListener('click', async function() {
+            const roundId = document.getElementById('manualFixturesRoundId').value;
+            if (!roundId) {
+                alert('No round ID set');
+                return;
+            }
+
+            const rows = document.querySelectorAll('.fixture-row');
+            const fixtures = [];
+
+            for (const row of rows) {
+                const homeTeam = row.querySelector('.home-team').value;
+                const awayTeam = row.querySelector('.away-team').value;
+                const date = row.querySelector('.fixture-date').value;
+                const time = row.querySelector('.fixture-time').value;
+
+                if (!homeTeam || !awayTeam) {
+                    alert('All fixtures must have home and away teams selected');
+                    return;
+                }
+                if (homeTeam === awayTeam) {
+                    alert('Home and away teams cannot be the same');
+                    return;
+                }
+                if (!date || !time) {
+                    alert('All fixtures must have date and time set');
+                    return;
+                }
+
+                fixtures.push({
+                    home_team: homeTeam,
+                    away_team: awayTeam,
+                    date: date,
+                    time: time
+                });
+            }
+
+            if (fixtures.length < 6) {
+                alert('Minimum 6 fixtures required');
+                return;
+            }
+
+            const btn = this;
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';
+
+            try {
+                const response = await fetch(`/api/rounds/${roundId}/manual-fixtures`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        fixtures: fixtures,
+                        clear_existing: true
+                    })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(`Success! Added ${data.fixtures_added} fixtures.\n\n${data.message}`);
+                    bootstrap.Modal.getInstance(manualFixturesModal).hide();
+                    location.reload();
+                } else {
+                    alert('Failed to save fixtures:\n\n' + data.error);
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        });
     }
 </script>
 {% endblock %}
