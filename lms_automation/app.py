@@ -2069,7 +2069,10 @@ def handle_rounds():
         return jsonify([{
             'id': r.id,
             'round_number': r.round_number,
+            'pl_matchday': r.pl_matchday,
             'status': r.status,
+            'special_measure': r.special_measure,
+            'fixtures_count': len(r.fixtures) if r.fixtures else 0,
             'start_date': r.start_date.isoformat() if r.start_date else None,
             'end_date': r.end_date.isoformat() if r.end_date else None
         } for r in rounds])

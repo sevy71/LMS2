@@ -2820,5 +2820,109 @@ function attachPlayerEventListeners() {
             }
         });
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ADD FIXTURES MODAL HANDLERS (Issue 2 Fix)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    const addFixturesModal = document.getElementById('addFixturesModal');
+    if (addFixturesModal) {
+        const fixtureRoundSelect = document.getElementById('fixtureRoundSelect');
+        const confirmAddFixturesBtn = document.getElementById('confirmAddFixturesBtn');
+        const fixtureRoundInfo = document.getElementById('fixtureRoundInfo');
+
+        // Populate dropdown when modal opens
+        addFixturesModal.addEventListener('show.bs.modal', async function() {
+            // Reset state
+            fixtureRoundSelect.innerHTML = '<option value="">Loading...</option>';
+            confirmAddFixturesBtn.disabled = true;
+            fixtureRoundInfo.innerHTML = '';
+
+            try {
+                // Fetch existing rounds from our API
+                const response = await fetch('/api/rounds');
+                const rounds = await response.json();
+
+                if (!rounds || rounds.length === 0) {
+                    fixtureRoundSelect.innerHTML = '<option value="">No rounds found</option>';
+                    return;
+                }
+
+                // Build dropdown with rounds that might need fixtures
+                let options = '<option value="">Select a round...</option>';
+                rounds.forEach(round => {
+                    const fixtureCount = round.fixtures_count || 0;
+                    const needsFixtures = fixtureCount === 0 || round.special_measure === 'WAITING_FOR_FIXTURES';
+                    const label = `Round ${round.round_number} (Matchday ${round.pl_matchday}) - ${fixtureCount} fixtures`;
+                    const badge = needsFixtures ? ' ⚠️' : '';
+                    options += `<option value="${round.id}" data-matchday="${round.pl_matchday}">${label}${badge}</option>`;
+                });
+
+                fixtureRoundSelect.innerHTML = options;
+
+            } catch (error) {
+                console.error('Failed to load rounds:', error);
+                fixtureRoundSelect.innerHTML = '<option value="">Error loading rounds</option>';
+            }
+        });
+
+        // Handle round selection
+        fixtureRoundSelect.addEventListener('change', function() {
+            const roundId = this.value;
+            confirmAddFixturesBtn.disabled = !roundId;
+
+            if (roundId) {
+                const selectedOption = this.options[this.selectedIndex];
+                const matchday = selectedOption.getAttribute('data-matchday');
+                fixtureRoundInfo.innerHTML = `
+                    <div class="alert alert-secondary">
+                        <small>Will fetch fixtures for <strong>Matchday ${matchday}</strong> from the Premier League API.</small>
+                    </div>
+                `;
+            } else {
+                fixtureRoundInfo.innerHTML = '';
+            }
+        });
+
+        // Handle confirm button
+        confirmAddFixturesBtn.addEventListener('click', async function() {
+            const roundId = fixtureRoundSelect.value;
+            if (!roundId) return;
+
+            const btn = this;
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Loading...';
+
+            try {
+                const response = await fetch(`/api/rounds/${roundId}/fixtures`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    let message = `Success! Added ${data.fixtures_added} fixtures.`;
+                    if (data.fixtures_removed > 0) {
+                        message += `\n\n⚠️ ${data.fixtures_removed} fixtures were filtered (already played or postponed).`;
+                    }
+                    if (data.warning) {
+                        message += `\n\n${data.warning}`;
+                    }
+                    alert(message);
+                    bootstrap.Modal.getInstance(addFixturesModal).hide();
+                    location.reload();
+                } else {
+                    alert('Failed to add fixtures:\n\n' + data.error);
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        });
+    }
 </script>
 {% endblock %}
