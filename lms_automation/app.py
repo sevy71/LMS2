@@ -1553,6 +1553,54 @@ def validate_fixtures(fixtures: list, now_utc: datetime) -> tuple:
     return (True, "OK")
 
 
+def validate_stored_fixtures(round_obj: Round) -> tuple:
+    """Validate fixtures already stored in a round before processing.
+
+    This is for re-validating existing data, NOT for new API data.
+    Does NOT check "kickoff in past" since stored fixtures may be from past rounds.
+
+    Rules:
+    - If no fixtures → invalid
+    - If fixture count < 6 → invalid ("Too few fixtures")
+    - If fixture count > 12 → invalid ("Too many fixtures")
+    - If no kickoff times → invalid
+    - Otherwise → valid
+
+    Args:
+        round_obj: The Round object with fixtures relationship
+
+    Returns:
+        (True, "OK") or (False, reason)
+    """
+    fixtures = round_obj.fixtures or []
+
+    # Rule: No fixtures
+    if not fixtures:
+        return (False, "No fixtures stored")
+
+    fixture_count = len(fixtures)
+
+    # Rule: Too few fixtures
+    if fixture_count < 6:
+        return (False, f"Too few fixtures ({fixture_count})")
+
+    # Rule: Too many fixtures
+    if fixture_count > 12:
+        return (False, f"Too many fixtures ({fixture_count})")
+
+    # Check for kickoff times
+    kickoff_count = 0
+    for fx in fixtures:
+        if getattr(fx, 'date', None) and getattr(fx, 'time', None):
+            kickoff_count += 1
+
+    # Rule: No kickoff times
+    if kickoff_count == 0:
+        return (False, "No kickoff times found")
+
+    return (True, "OK")
+
+
 @app.route('/api/admin/rounds/<int:round_id>/apply-missed-picks', methods=['POST'])
 @admin_required
 def apply_missed_picks(round_id):
@@ -1571,6 +1619,15 @@ def apply_missed_picks(round_id):
 
         # Determine dry-run mode (preview only; no DB writes)
         dry_run = str(request.args.get('dry_run', 'false')).lower() in ('1', 'true', 'yes', 'y')
+
+        # Re-validate stored fixtures before processing
+        is_valid, reason = validate_stored_fixtures(round_obj)
+        if not is_valid:
+            app.logger.error(f"INVALID STORED FIXTURES: Round {round_obj.id} → {reason} — skipping auto-picks")
+            return jsonify({
+                'success': False,
+                'error': f'Invalid stored fixtures: {reason}. Please verify round fixtures before applying auto-picks.'
+            }), 400
 
         # Compute cutoff time
         anchor = round_obj.first_kickoff_at or _earliest_kickoff_for_round(round_obj) or round_obj.end_date
@@ -2516,11 +2573,21 @@ def auto_populate_results(round_id):
     """Auto-populate match results from the football API"""
     try:
         round_obj = Round.query.get_or_404(round_id)
+
+        # Re-validate stored fixtures before processing
+        is_valid, reason = validate_stored_fixtures(round_obj)
+        if not is_valid:
+            app.logger.error(f"INVALID STORED FIXTURES: Round {round_obj.id} → {reason} — skipping auto-populate")
+            return jsonify({
+                'success': False,
+                'error': f'Invalid stored fixtures: {reason}. Please verify round fixtures before auto-populating results.'
+            }), 400
+
         fixtures = Fixture.query.filter_by(round_id=round_id).all()
-        
+
         if not fixtures:
             return jsonify({'success': False, 'error': 'No fixtures found for this round'}), 400
-        
+
         # Get updated results from API
         from football_api import FootballDataAPI
         api = FootballDataAPI()
@@ -3284,6 +3351,15 @@ def process_round_results(round_id):
             return jsonify({'success': False, 'error': 'No results provided'}), 400
 
         round_obj = Round.query.get_or_404(round_id)
+
+        # Re-validate stored fixtures before processing
+        is_valid, reason = validate_stored_fixtures(round_obj)
+        if not is_valid:
+            app.logger.error(f"INVALID STORED FIXTURES: Round {round_obj.id} → {reason} — skipping result processing")
+            return jsonify({
+                'success': False,
+                'error': f'Invalid stored fixtures: {reason}. Please verify round fixtures before processing results.'
+            }), 400
 
         # GUARD: Block processing if round was early-terminated
         # This prevents fixture results from corrupting state after rollover
