@@ -634,6 +634,7 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
 
         # Load fixtures from API
         fixtures_loaded = 0
+        fixtures_removed = 0
         earliest_kickoff = None
 
         try:
@@ -642,15 +643,18 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
             fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday, season='2025')
             formatted_fixtures = api.format_fixtures_for_db(fixtures_data, next_matchday)
 
-            # Validate fixtures before attaching
+            # Filter and validate fixtures
             now_utc = datetime.utcnow()
-            is_valid, reason = validate_fixtures(formatted_fixtures, now_utc)
+            is_valid, filtered_fixtures, removed_count, message = filter_and_validate_fixtures(formatted_fixtures, now_utc)
+            fixtures_removed = removed_count
+
+            app.logger.info(f"ROLLOVER Round {new_round.id}: {message}")
 
             if not is_valid:
-                app.logger.error(f"FIXTURE VALIDATION FAILED: Round {new_round.id} (Matchday {next_matchday}) → {reason}")
+                app.logger.error(f"FIXTURE VALIDATION FAILED: Round {new_round.id} (Matchday {next_matchday}) → {message}")
                 # Mark round as waiting for fixtures instead of attaching bad data
                 new_round.special_measure = 'WAITING_FOR_FIXTURES'
-                new_round.special_note = f'Fixture validation failed: {reason}'
+                new_round.special_note = f'Fixture validation failed: {message}'
                 new_round.status = 'pending'
                 db.session.commit()
                 return {
@@ -661,11 +665,12 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
                     'status': new_round.status,
                     'special_measure': new_round.special_measure,
                     'fixtures_loaded': 0,
+                    'fixtures_removed': removed_count,
                     'season_break': False,
-                    'message': f'Round {new_round.round_number} created but fixture validation failed: {reason}'
+                    'message': f'Round {new_round.round_number} created but fixture validation failed: {message}'
                 }
 
-            for fixture_data in formatted_fixtures:
+            for fixture_data in filtered_fixtures:
                 fixture = Fixture(
                     round_id=new_round.id,
                     event_id=fixture_data['event_id'],
@@ -703,6 +708,10 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
 
         app.logger.info(f"NEXT ROUND CREATED: id={new_round.id}, round={new_round.round_number}, cycle={new_round.cycle_number}, matchday={next_matchday}, fixtures={fixtures_loaded}")
 
+        result_message = f'Round {new_round.round_number} created with {fixtures_loaded} fixtures (Matchday {next_matchday})'
+        if fixtures_removed > 0:
+            result_message += f' ({fixtures_removed} removed as invalid)'
+
         return {
             'created': True,
             'round_id': new_round.id,
@@ -711,8 +720,9 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
             'status': new_round.status,
             'special_measure': new_round.special_measure,
             'fixtures_loaded': fixtures_loaded,
+            'fixtures_removed': fixtures_removed,
             'season_break': False,
-            'message': f'Round {new_round.round_number} created with {fixtures_loaded} fixtures (Matchday {next_matchday})'
+            'message': result_message
         }
 
     except Exception as e:
@@ -1553,6 +1563,103 @@ def validate_fixtures(fixtures: list, now_utc: datetime) -> tuple:
     return (True, "OK")
 
 
+def filter_and_validate_fixtures(fixtures: list, now_utc: datetime) -> tuple:
+    """Filter out invalid fixtures and validate the remaining set.
+
+    This is more lenient than validate_fixtures - it filters out bad fixtures
+    instead of rejecting the entire set.
+
+    Filtering rules:
+    - Remove fixtures where kickoff < now_utc - 24 hours (already played)
+    - Remove fixtures without valid kickoff times
+
+    Validation rules (on filtered set):
+    - If remaining fixtures < 5 → invalid
+    - If remaining fixtures > 12 → invalid
+    - Otherwise → valid
+
+    Args:
+        fixtures: List of fixture dicts (from format_fixtures_for_db or similar)
+        now_utc: Current UTC datetime
+
+    Returns:
+        (is_valid, filtered_fixtures, removed_count, message)
+        - is_valid: True if filtered set is usable
+        - filtered_fixtures: List of valid fixtures
+        - removed_count: Number of fixtures removed
+        - message: Description of result
+    """
+    if not fixtures:
+        return (False, [], 0, "No fixtures returned from API")
+
+    original_count = len(fixtures)
+    cutoff_time = now_utc - timedelta(hours=24)
+    filtered = []
+    removed_reasons = []
+
+    for fx in fixtures:
+        fx_date = fx.get('date') if isinstance(fx, dict) else getattr(fx, 'date', None)
+        fx_time = fx.get('time') if isinstance(fx, dict) else getattr(fx, 'time', None)
+
+        # Skip fixtures without kickoff times
+        if not fx_date or not fx_time:
+            removed_reasons.append(f"{fx.get('home_team', 'Unknown')} vs {fx.get('away_team', 'Unknown')}: no kickoff time")
+            continue
+
+        try:
+            kickoff = datetime.combine(fx_date, fx_time)
+
+            # Skip fixtures that already kicked off more than 24 hours ago
+            if kickoff < cutoff_time:
+                removed_reasons.append(f"{fx.get('home_team', 'Unknown')} vs {fx.get('away_team', 'Unknown')}: already played ({kickoff.strftime('%d %b %H:%M')})")
+                continue
+
+            # Keep this fixture
+            filtered.append(fx)
+
+        except Exception as e:
+            removed_reasons.append(f"{fx.get('home_team', 'Unknown')} vs {fx.get('away_team', 'Unknown')}: invalid date/time")
+            continue
+
+    removed_count = original_count - len(filtered)
+
+    # Log removed fixtures if any
+    if removed_count > 0:
+        app.logger.info(f"FIXTURE FILTER: Removed {removed_count} fixtures:")
+        for reason in removed_reasons:
+            app.logger.info(f"  - {reason}")
+
+    # Validate filtered set
+    if len(filtered) < 5:
+        return (False, filtered, removed_count,
+                f"Too few valid fixtures remaining ({len(filtered)} after filtering {removed_count})")
+
+    if len(filtered) > 12:
+        return (False, filtered, removed_count,
+                f"Too many fixtures ({len(filtered)})")
+
+    # Check if earliest remaining kickoff is still in the future
+    earliest_kickoff = None
+    for fx in filtered:
+        fx_date = fx.get('date') if isinstance(fx, dict) else getattr(fx, 'date', None)
+        fx_time = fx.get('time') if isinstance(fx, dict) else getattr(fx, 'time', None)
+        if fx_date and fx_time:
+            dt = datetime.combine(fx_date, fx_time)
+            if earliest_kickoff is None or dt < earliest_kickoff:
+                earliest_kickoff = dt
+
+    if earliest_kickoff and earliest_kickoff <= now_utc:
+        return (False, filtered, removed_count,
+                f"All remaining fixtures have kicked off ({earliest_kickoff.isoformat()})")
+
+    # Success
+    if removed_count > 0:
+        return (True, filtered, removed_count,
+                f"Accepted {len(filtered)} fixtures ({removed_count} removed as invalid)")
+    else:
+        return (True, filtered, 0, f"All {len(filtered)} fixtures valid")
+
+
 def validate_stored_fixtures(round_obj: Round) -> tuple:
     """Validate fixtures already stored in a round before processing.
 
@@ -2075,16 +2182,18 @@ def handle_rounds():
                 fixtures_data = api.get_premier_league_fixtures(pl_matchday)
                 formatted_fixtures = api.format_fixtures_for_db(fixtures_data, pl_matchday)
 
-                # Validate fixtures before attaching
+                # Filter and validate fixtures (removes past/invalid fixtures automatically)
                 now_utc = datetime.utcnow()
-                is_valid, reason = validate_fixtures(formatted_fixtures, now_utc)
+                is_valid, filtered_fixtures, removed_count, message = filter_and_validate_fixtures(formatted_fixtures, now_utc)
+
+                app.logger.info(f"Round {new_round.id}: {message}")
 
                 if not is_valid:
-                    app.logger.error(f"FIXTURE VALIDATION FAILED: Round {new_round.id} (Matchday {pl_matchday}) → {reason}")
+                    app.logger.error(f"FIXTURE VALIDATION FAILED: Round {new_round.id} (Matchday {pl_matchday}) → {message}")
                     # Create round but mark as WAITING_FOR_FIXTURES (don't attach bad fixtures)
                     new_round.status = 'pending'
                     new_round.special_measure = 'WAITING_FOR_FIXTURES'
-                    new_round.special_note = f'Fixture validation failed: {reason}'
+                    new_round.special_note = f'Fixture validation failed: {message}'
                     db.session.commit()
                     return jsonify({
                         'success': True,
@@ -2092,14 +2201,15 @@ def handle_rounds():
                         'round_number': new_round.round_number,
                         'pl_matchday': new_round.pl_matchday,
                         'fixtures_added': 0,
-                        'warning': f'Round created but fixtures invalid: {reason}. Use "Retry Auto Load" or manual entry.',
+                        'fixtures_removed': removed_count,
+                        'warning': f'Round created but fixtures invalid: {message}. Use "Retry Auto Load" or manual entry.',
                         'waiting_for_fixtures': True
                     })
 
-                if formatted_fixtures:
-                    # Create fixture records from API data
+                if filtered_fixtures:
+                    # Create fixture records from filtered API data
                     earliest_kickoff = None
-                    for fixture_data in formatted_fixtures:
+                    for fixture_data in filtered_fixtures:
                         fixture = Fixture(
                             round_id=new_round.id,
                             event_id=fixture_data['event_id'],
@@ -2122,18 +2232,25 @@ def handle_rounds():
                             pass
                     if earliest_kickoff:
                         new_round.first_kickoff_at = earliest_kickoff
-                    
+
                     db.session.commit()
-                    
-                    return jsonify({
-                        'success': True, 
-                        'id': new_round.id, 
+
+                    response = {
+                        'success': True,
+                        'id': new_round.id,
                         'round_number': new_round.round_number,
                         'pl_matchday': new_round.pl_matchday,
-                        'fixtures_added': len(formatted_fixtures)
-                    })
+                        'fixtures_added': len(filtered_fixtures)
+                    }
+
+                    # Add warning if fixtures were filtered
+                    if removed_count > 0:
+                        response['fixtures_removed'] = removed_count
+                        response['warning'] = f'{removed_count} fixtures were removed automatically (already played or invalid). Please review.'
+
+                    return jsonify(response)
                 else:
-                    # No fixtures from API, create fallback fixtures
+                    # No fixtures from API
                     raise Exception("No fixtures returned from API")
                 
             except Exception as fixture_error:
@@ -2550,22 +2667,25 @@ def retry_load_fixtures(round_id):
         fixtures_data = api.get_premier_league_fixtures(round_obj.pl_matchday)
         formatted_fixtures = api.format_fixtures_for_db(fixtures_data, round_obj.pl_matchday)
 
-        # Validate fixtures
+        # Filter and validate fixtures
         now_utc = datetime.utcnow()
-        is_valid, reason = validate_fixtures(formatted_fixtures, now_utc)
+        is_valid, filtered_fixtures, removed_count, message = filter_and_validate_fixtures(formatted_fixtures, now_utc)
+
+        app.logger.info(f"RETRY FIXTURES: Round {round_obj.id} - {message}")
 
         if not is_valid:
-            app.logger.error(f"RETRY FIXTURES FAILED: Round {round_obj.id} (Matchday {round_obj.pl_matchday}) → {reason}")
+            app.logger.error(f"RETRY FIXTURES FAILED: Round {round_obj.id} (Matchday {round_obj.pl_matchday}) → {message}")
             db.session.rollback()
             return jsonify({
                 'success': False,
-                'error': f'Fixture validation failed: {reason}',
+                'error': f'Fixture validation failed: {message}',
+                'fixtures_removed': removed_count,
                 'suggestion': 'Try again later or use manual fixture entry.'
             }), 400
 
         # Fixtures valid - attach them
         earliest_kickoff = None
-        for fixture_data in formatted_fixtures:
+        for fixture_data in filtered_fixtures:
             fixture = Fixture(
                 round_id=round_obj.id,
                 event_id=fixture_data['event_id'],
@@ -2597,14 +2717,21 @@ def retry_load_fixtures(round_id):
 
         db.session.commit()
 
-        app.logger.info(f"RETRY FIXTURES SUCCESS: Round {round_obj.id} loaded {len(formatted_fixtures)} fixtures")
+        app.logger.info(f"RETRY FIXTURES SUCCESS: Round {round_obj.id} loaded {len(filtered_fixtures)} fixtures")
 
-        return jsonify({
+        # Build response
+        response = {
             'success': True,
-            'fixtures_added': len(formatted_fixtures),
+            'fixtures_added': len(filtered_fixtures),
             'first_kickoff_at': earliest_kickoff.isoformat() if earliest_kickoff else None,
-            'message': f'Successfully loaded {len(formatted_fixtures)} fixtures. Round is now ready.'
-        })
+            'message': f'Successfully loaded {len(filtered_fixtures)} fixtures. Round is now ready.'
+        }
+
+        if removed_count > 0:
+            response['fixtures_removed'] = removed_count
+            response['warning'] = f'{removed_count} fixtures were removed automatically (already played or invalid).'
+
+        return jsonify(response)
 
     except Exception as e:
         db.session.rollback()

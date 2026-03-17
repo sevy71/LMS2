@@ -2593,10 +2593,21 @@ function attachPlayerEventListeners() {
                 const data = await response.json();
 
                 if (data.success) {
-                    alert(`Success! Loaded ${data.fixtures_added} fixtures.\n\n${data.message}`);
+                    let message = `Success! Loaded ${data.fixtures_added} fixtures.`;
+                    if (data.fixtures_removed > 0) {
+                        message += `\n\n⚠️ ${data.fixtures_removed} fixtures were removed automatically (already played or invalid).`;
+                        message += `\n\nPlease review the fixtures before activating the round.`;
+                    }
+                    message += `\n\n${data.message}`;
+                    alert(message);
                     location.reload();
                 } else {
-                    alert(`Failed to load fixtures:\n\n${data.error}\n\n${data.suggestion || 'Try manual entry instead.'}`);
+                    let errorMsg = `Failed to load fixtures:\n\n${data.error}`;
+                    if (data.fixtures_removed > 0) {
+                        errorMsg += `\n\n(${data.fixtures_removed} fixtures were filtered out)`;
+                    }
+                    errorMsg += `\n\n${data.suggestion || 'Try manual entry instead.'}`;
+                    alert(errorMsg);
                     btn.disabled = false;
                     btn.innerHTML = originalHtml;
                 }
