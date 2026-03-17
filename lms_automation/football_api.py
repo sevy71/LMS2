@@ -104,23 +104,38 @@ class FootballDataAPI:
             print(f"Error getting matchdays: {e}")
             return list(range(1, 39))  # Default to 1-38
 
+    # Valid API statuses for playable matches
+    VALID_MATCH_STATUSES = ['TIMED', 'SCHEDULED']
+
     def format_fixtures_for_db(self, fixtures_data: Dict, target_matchday: int) -> List[Dict]:
         """
-        Format fixtures data for database insertion
-        
+        Format fixtures data for database insertion.
+
+        Only includes valid, playable matches (TIMED/SCHEDULED status).
+        Excludes POSTPONED, FINISHED, CANCELLED, etc.
+
         Args:
             fixtures_data: Raw API response
             target_matchday: The matchday to filter for
-            
+
         Returns:
             List of formatted fixture dictionaries
         """
         formatted_fixtures = []
-        
+        skipped_count = 0
+
         for match in fixtures_data.get('matches', []):
             if match.get('matchday') != target_matchday:
                 continue
-                
+
+            # ISSUE 1 FIX: Only include TIMED/SCHEDULED matches
+            api_status = match.get('status', '')
+            if api_status not in self.VALID_MATCH_STATUSES:
+                print(f"Skipping match {match.get('homeTeam', {}).get('name', '?')} vs "
+                      f"{match.get('awayTeam', {}).get('name', '?')}: status={api_status}")
+                skipped_count += 1
+                continue
+
             # Parse match date
             match_date = None
             match_time = None
@@ -131,30 +146,17 @@ class FootballDataAPI:
                     match_time = dt.time()
                 except ValueError:
                     pass
-            
+
             # Extract team names
             home_team = match.get('homeTeam', {}).get('name', 'TBD')
             away_team = match.get('awayTeam', {}).get('name', 'TBD')
-            
+
             # Extract scores if available
             score = match.get('score', {})
             full_time = score.get('fullTime', {})
             home_score = full_time.get('home')
             away_score = full_time.get('away')
-            
-            # Determine match status
-            status_map = {
-                'SCHEDULED': 'scheduled',
-                'LIVE': 'live', 
-                'IN_PLAY': 'live',
-                'PAUSED': 'live',
-                'FINISHED': 'completed',
-                'POSTPONED': 'postponed',
-                'SUSPENDED': 'postponed',
-                'CANCELLED': 'postponed'
-            }
-            match_status = status_map.get(match.get('status'), 'scheduled')
-            
+
             formatted_fixture = {
                 'event_id': str(match.get('id', '')),
                 'home_team': home_team,
@@ -163,12 +165,15 @@ class FootballDataAPI:
                 'time': match_time,
                 'home_score': home_score,
                 'away_score': away_score,
-                'status': match_status,
+                'status': 'scheduled',  # All valid matches start as scheduled
                 'pl_matchday': target_matchday
             }
-            
+
             formatted_fixtures.append(formatted_fixture)
-        
+
+        if skipped_count > 0:
+            print(f"Skipped {skipped_count} non-playable matches (POSTPONED/FINISHED/etc)")
+
         return formatted_fixtures
 
     def get_matchday_info(self, matchday: int) -> Dict:
