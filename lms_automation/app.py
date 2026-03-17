@@ -642,6 +642,29 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
             fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday, season='2025')
             formatted_fixtures = api.format_fixtures_for_db(fixtures_data, next_matchday)
 
+            # Validate fixtures before attaching
+            now_utc = datetime.utcnow()
+            is_valid, reason = validate_fixtures(formatted_fixtures, now_utc)
+
+            if not is_valid:
+                app.logger.error(f"FIXTURE VALIDATION FAILED: Round {new_round.id} (Matchday {next_matchday}) → {reason}")
+                # Mark round as waiting for fixtures instead of attaching bad data
+                new_round.special_measure = 'WAITING_FOR_FIXTURES'
+                new_round.special_note = f'Fixture validation failed: {reason}'
+                new_round.status = 'pending'
+                db.session.commit()
+                return {
+                    'created': True,
+                    'round_id': new_round.id,
+                    'round_number': new_round.round_number,
+                    'cycle_number': new_round.cycle_number,
+                    'status': new_round.status,
+                    'special_measure': new_round.special_measure,
+                    'fixtures_loaded': 0,
+                    'season_break': False,
+                    'message': f'Round {new_round.round_number} created but fixture validation failed: {reason}'
+                }
+
             for fixture_data in formatted_fixtures:
                 fixture = Fixture(
                     round_id=new_round.id,
@@ -1469,6 +1492,67 @@ def _opposing_team_from_past_pick(pick: Pick) -> str:
     except Exception:
         return None
 
+
+def validate_fixtures(fixtures: list, now_utc: datetime) -> tuple:
+    """Validate fixtures to prevent stale/incorrect API data from causing issues.
+
+    Rules:
+    - If no fixtures → invalid
+    - If no kickoff times → invalid
+    - If earliest kickoff < now_utc → invalid ("Kickoff in past")
+    - If fixture count < 6 → invalid ("Too few fixtures")
+    - If fixture count > 12 → invalid ("Too many fixtures")
+    - Otherwise → valid
+
+    Args:
+        fixtures: List of fixture dicts (from format_fixtures_for_db or similar)
+        now_utc: Current UTC datetime
+
+    Returns:
+        (True, "OK") or (False, reason)
+    """
+    # Rule: No fixtures
+    if not fixtures:
+        return (False, "No fixtures returned")
+
+    fixture_count = len(fixtures)
+
+    # Rule: Too few fixtures (allow FA Cup weekends with fewer games)
+    if fixture_count < 6:
+        return (False, f"Too few fixtures ({fixture_count})")
+
+    # Rule: Too many fixtures
+    if fixture_count > 12:
+        return (False, f"Too many fixtures ({fixture_count})")
+
+    # Find earliest kickoff
+    earliest_kickoff = None
+    kickoff_count = 0
+
+    for fx in fixtures:
+        fx_date = fx.get('date') if isinstance(fx, dict) else getattr(fx, 'date', None)
+        fx_time = fx.get('time') if isinstance(fx, dict) else getattr(fx, 'time', None)
+
+        if fx_date and fx_time:
+            try:
+                dt = datetime.combine(fx_date, fx_time)
+                kickoff_count += 1
+                if earliest_kickoff is None or dt < earliest_kickoff:
+                    earliest_kickoff = dt
+            except Exception:
+                pass
+
+    # Rule: No kickoff times
+    if kickoff_count == 0:
+        return (False, "No kickoff times found")
+
+    # Rule: Earliest kickoff in the past
+    if earliest_kickoff and earliest_kickoff <= now_utc:
+        return (False, f"Kickoff in past ({earliest_kickoff.isoformat()})")
+
+    return (True, "OK")
+
+
 @app.route('/api/admin/rounds/<int:round_id>/apply-missed-picks', methods=['POST'])
 @admin_required
 def apply_missed_picks(round_id):
@@ -1492,8 +1576,22 @@ def apply_missed_picks(round_id):
         anchor = round_obj.first_kickoff_at or _earliest_kickoff_for_round(round_obj) or round_obj.end_date
         if not anchor:
             return jsonify({'success': False, 'error': 'Cannot determine first kickoff or deadline for this round'}), 400
+
+        now_utc = datetime.utcnow()
+
+        # SAFEGUARD: Block auto-picks if kickoff is in the past (stale data protection)
+        if anchor <= now_utc:
+            app.logger.warning(
+                f"AUTO-PICK BLOCKED: Round {round_obj.id} kickoff in past ({anchor.isoformat()})"
+            )
+            return jsonify({
+                'success': False,
+                'error': f'Auto-pick blocked: kickoff time ({anchor.isoformat()}) is in the past. '
+                         f'This may indicate stale fixture data. Please verify round fixtures.'
+            }), 400
+
         cutoff = anchor - timedelta(hours=1)
-        if (datetime.utcnow() < cutoff) and (not dry_run):
+        if (now_utc < cutoff) and (not dry_run):
             return jsonify({'success': False, 'error': 'Cutoff not reached yet. Try after the submission deadline.'}), 400
 
         # Build sets
@@ -1919,7 +2017,19 @@ def handle_rounds():
                 api = FootballDataAPI()
                 fixtures_data = api.get_premier_league_fixtures(pl_matchday)
                 formatted_fixtures = api.format_fixtures_for_db(fixtures_data, pl_matchday)
-                
+
+                # Validate fixtures before attaching
+                now_utc = datetime.utcnow()
+                is_valid, reason = validate_fixtures(formatted_fixtures, now_utc)
+
+                if not is_valid:
+                    app.logger.error(f"FIXTURE VALIDATION FAILED: Round {new_round.id} (Matchday {pl_matchday}) → {reason}")
+                    db.session.rollback()
+                    return jsonify({
+                        'success': False,
+                        'error': f'Fixture validation failed: {reason}. Use manual fixture entry if needed.'
+                    }), 400
+
                 if formatted_fixtures:
                     # Create fixture records from API data
                     earliest_kickoff = None
@@ -2266,7 +2376,18 @@ def add_fixtures_to_round(round_id):
             api = FootballDataAPI()
             fixtures_data = api.get_premier_league_fixtures(round_obj.pl_matchday)
             formatted_fixtures = api.format_fixtures_for_db(fixtures_data, round_obj.pl_matchday)
-            
+
+            # Validate fixtures before attaching
+            now_utc = datetime.utcnow()
+            is_valid, reason = validate_fixtures(formatted_fixtures, now_utc)
+
+            if not is_valid:
+                app.logger.error(f"FIXTURE VALIDATION FAILED: Round {round_obj.id} (Matchday {round_obj.pl_matchday}) → {reason}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Fixture validation failed: {reason}. Use manual fixture entry if needed.'
+                }), 400
+
             if formatted_fixtures:
                 # Create fixture records from API data
                 earliest_kickoff = None
@@ -3784,6 +3905,24 @@ def check_new_season():
         api = FootballDataAPI()
         fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday, season='2025')
         formatted_fixtures = api.format_fixtures_for_db(fixtures_data, next_matchday)
+
+        # Validate fixtures before attaching
+        now_utc = datetime.utcnow()
+        is_valid, reason = validate_fixtures(formatted_fixtures, now_utc)
+
+        if not is_valid:
+            app.logger.error(f"FIXTURE VALIDATION FAILED: Round {target_round.id} (Matchday {next_matchday}) → {reason}")
+            return jsonify({
+                'success': False,
+                'fixtures_available': True,
+                'error': f'Fixture validation failed: {reason}. Round remains in waiting state.',
+                'round_info': {
+                    'id': target_round.id,
+                    'round_number': target_round.round_number,
+                    'status': target_round.status,
+                    'special_measure': target_round.special_measure
+                }
+            }), 400
 
         fixtures_loaded = 0
         earliest_kickoff = None
