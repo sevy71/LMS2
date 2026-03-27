@@ -442,14 +442,15 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
             'message': str - Human-readable result message
     """
     try:
-        # Calculate the next round number (global sequence)
-        max_round = db.session.query(db.func.max(Round.round_number)).scalar() or 0
-        next_round_number = max_round + 1
+        # Calculate the next round number WITHIN THE NEW CYCLE
+        # Round numbers reset to 1 for each new cycle
+        max_round_in_cycle = Round.query.filter_by(cycle_number=next_cycle).order_by(Round.round_number.desc()).first()
+        next_round_number = (max_round_in_cycle.round_number + 1) if max_round_in_cycle else 1
 
         # Log the parameters for debugging
         app.logger.info(f"CREATE_NEXT_ROUND_AFTER_ROLLOVER: reference_round.id={reference_round.id}, "
                         f"reference_round.cycle_number={reference_round.cycle_number}, "
-                        f"next_cycle={next_cycle}, next_round_number={next_round_number}")
+                        f"next_cycle={next_cycle}, next_round_number={next_round_number} (cycle-based)")
 
         # IDEMPOTENCY CHECK 1: Does a round with this (round_number, cycle_number) already exist?
         existing_round = Round.query.filter_by(
@@ -2114,11 +2115,13 @@ def handle_rounds():
                 app.logger.info(f"POST /api/rounds: Using current_cycle={current_cycle} (no rollover detected)")
 
             # Auto-assign round_number if not provided
+            # Round numbers reset to 1 for each new cycle
             round_number = data.get('round_number')
             if not round_number:
-                # Find max round_number GLOBALLY (not per-cycle) to continue sequence
-                max_round_global = Round.query.order_by(Round.round_number.desc()).first()
-                round_number = (max_round_global.round_number + 1) if max_round_global else 1
+                # Find max round_number WITHIN THIS CYCLE to continue sequence
+                max_round_in_cycle = Round.query.filter_by(cycle_number=current_cycle).order_by(Round.round_number.desc()).first()
+                round_number = (max_round_in_cycle.round_number + 1) if max_round_in_cycle else 1
+                app.logger.info(f"POST /api/rounds: Auto-assigned round_number={round_number} for cycle={current_cycle}")
 
             # Cycle-aware duplicate check: block only if (round_number, cycle_number) pair exists
             existing_round = Round.query.filter_by(round_number=round_number, cycle_number=current_cycle).first()
@@ -4755,10 +4758,75 @@ def emergency_delete_round4():
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/api/admin/start-new-game', methods=['POST'])
+@admin_required
+def start_new_game():
+    """Start a new game after a winner - reactivates all players, increments cycle, resets round to 1.
+
+    This preserves all historical data (past cycles, picks, rounds) while starting fresh.
+    Use this when a game has been won and you want to start a new competition.
+    """
+    try:
+        # Get current max cycle
+        max_cycle = db.session.query(db.func.max(Round.cycle_number)).scalar() or 0
+        next_cycle = max_cycle + 1
+
+        # Count players by status before changes
+        winner_count = Player.query.filter_by(status='winner').count()
+        eliminated_count = Player.query.filter_by(status='eliminated').count()
+        active_count = Player.query.filter_by(status='active').count()
+
+        # Reactivate ALL players (active, eliminated, AND winner)
+        all_players = Player.query.all()
+        reactivated_count = 0
+        for player in all_players:
+            if player.status != 'active':
+                player.status = 'active'
+                reactivated_count += 1
+                db.session.add(player)
+
+        # Mark any active/pending rounds as completed with GAME_WON marker
+        active_rounds = Round.query.filter(Round.status.in_(['active', 'pending'])).all()
+        rounds_closed = 0
+        for r in active_rounds:
+            r.status = 'completed'
+            r.special_measure = 'GAME_WON'
+            db.session.add(r)
+            rounds_closed += 1
+
+        db.session.commit()
+
+        # Now create round 1 of the new cycle
+        reference_round = Round.query.order_by(Round.id.desc()).first()
+        if reference_round:
+            next_round_info = create_next_round_after_rollover(reference_round, next_cycle)
+        else:
+            next_round_info = {'created': False, 'message': 'No reference round found - create round manually'}
+
+        app.logger.info(f"NEW GAME STARTED: Cycle {next_cycle}, reactivated {reactivated_count} players "
+                        f"(winner={winner_count}, eliminated={eliminated_count}, active={active_count})")
+
+        return jsonify({
+            'success': True,
+            'new_cycle': next_cycle,
+            'players_reactivated': reactivated_count,
+            'total_players': len(all_players),
+            'previous_winner_count': winner_count,
+            'previous_eliminated_count': eliminated_count,
+            'rounds_closed': rounds_closed,
+            'next_round': next_round_info
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Failed to start new game: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/reset-game', methods=['POST'])
 @admin_required
 def reset_game():
-    """Reset the game by deleting all game data except players"""
+    """Reset the game by deleting all game data except players (DESTRUCTIVE - use start-new-game instead)"""
     try:
         # Count items before deletion for reporting
         rounds_count = Round.query.count()

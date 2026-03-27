@@ -430,8 +430,13 @@ document.addEventListener('DOMContentLoaded', function() {
             </button>
         </div>
         <div class="col-lg-4 col-md-6 mb-3">
+            <button class="btn btn-outline-success w-100 py-2" data-bs-toggle="modal" data-bs-target="#startNewGameModal">
+                <i class="fas fa-trophy me-2"></i>Start New Game
+            </button>
+        </div>
+        <div class="col-lg-4 col-md-6 mb-3">
             <button class="btn btn-outline-danger w-100 py-2" data-bs-toggle="modal" data-bs-target="#resetGameModal">
-                <i class="fas fa-trash me-2"></i>Reset Game
+                <i class="fas fa-trash me-2"></i>Reset Game (Destructive)
             </button>
         </div>
     </div>
@@ -841,6 +846,39 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Start New Game Modal -->
+<div class="modal fade" id="startNewGameModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title"><i class="fas fa-trophy me-2"></i>Start New Game</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info">
+                    <strong>This is the correct way to start a new game after a winner.</strong>
+                </div>
+                <p>This action will:</p>
+                <ul>
+                    <li><strong>Reactivate all players</strong> (including winner and eliminated)</li>
+                    <li><strong>Start a new cycle</strong> with Round 1</li>
+                    <li><strong>Preserve all historical data</strong> (past cycles, picks, rounds)</li>
+                </ul>
+                <p class="text-muted">Use this when a game has been won and you want to start a fresh competition.</p>
+
+                <div class="mt-3">
+                    <label for="confirmNewGameText" class="form-label">Type "NEW GAME" to confirm:</label>
+                    <input type="text" class="form-control" id="confirmNewGameText" placeholder="NEW GAME">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" id="confirmNewGameBtn" disabled>Start New Game</button>
             </div>
         </div>
     </div>
@@ -1824,11 +1862,71 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
+    // Handle Start New Game confirmation input
+    document.getElementById('confirmNewGameText').addEventListener('input', function() {
+        const confirmBtn = document.getElementById('confirmNewGameBtn');
+        const inputValue = this.value.trim();
+        confirmBtn.disabled = (inputValue !== 'NEW GAME');
+    });
+
+    // Handle Start New Game confirmation
+    document.getElementById('confirmNewGameBtn').addEventListener('click', function() {
+        const confirmText = document.getElementById('confirmNewGameText').value.trim();
+
+        if (confirmText !== 'NEW GAME') {
+            alert('Please type "NEW GAME" to confirm');
+            return;
+        }
+
+        this.disabled = true;
+        this.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Starting...';
+
+        fetch('/api/admin/start-new-game', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const nextRound = data.next_round || {};
+                let message = `New game started successfully!\n\n`;
+                message += `New Cycle: ${data.new_cycle}\n`;
+                message += `Players Reactivated: ${data.players_reactivated}\n`;
+                message += `Total Players: ${data.total_players}\n`;
+                if (nextRound.created) {
+                    message += `\nRound ${nextRound.round_number} created automatically.`;
+                } else if (nextRound.message) {
+                    message += `\nNext round: ${nextRound.message}`;
+                }
+                alert(message);
+                location.reload();
+            } else {
+                alert('Error starting new game: ' + data.error);
+                document.getElementById('confirmNewGameBtn').disabled = false;
+                document.getElementById('confirmNewGameBtn').innerHTML = 'Start New Game';
+            }
+        })
+        .catch(error => {
+            alert('Error starting new game: ' + error);
+            document.getElementById('confirmNewGameBtn').disabled = false;
+            document.getElementById('confirmNewGameBtn').innerHTML = 'Start New Game';
+        });
+    });
+
+    // Reset Start New Game confirmation text when modal is hidden
+    document.getElementById('startNewGameModal').addEventListener('hidden.bs.modal', function() {
+        document.getElementById('confirmNewGameText').value = '';
+        document.getElementById('confirmNewGameBtn').disabled = true;
+        document.getElementById('confirmNewGameBtn').innerHTML = 'Start New Game';
+    });
+
     // Handle reset game confirmation input
     document.getElementById('confirmResetText').addEventListener('input', function() {
         const confirmBtn = document.getElementById('confirmResetBtn');
         const inputValue = this.value.trim();
-        
+
         if (inputValue === 'RESET GAME') {
             confirmBtn.disabled = false;
         } else {
