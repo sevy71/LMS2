@@ -17,10 +17,7 @@ import os
 import sys
 from collections import defaultdict
 
-DATABASE_URL = os.environ.get(
-    'DATABASE_URL',
-    "postgresql://postgres:REDACTED@REDACTED/railway"
-)
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 SUSPICIOUS_ONLY = '--suspicious-only' in sys.argv
 

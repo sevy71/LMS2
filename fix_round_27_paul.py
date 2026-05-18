@@ -16,10 +16,7 @@ import os
 import sys
 from datetime import datetime
 
-DATABASE_URL = os.environ.get(
-    'DATABASE_URL',
-    "postgresql://postgres:REDACTED@REDACTED/railway"
-)
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 DRY_RUN = '--fix' not in sys.argv
 

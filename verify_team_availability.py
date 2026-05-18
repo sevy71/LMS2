@@ -3,11 +3,12 @@
 Verify that all teams are available again after a rollover
 """
 
-import psycopg2
+import os
 from urllib.parse import urlparse
 
-# Database URL from your .env.local file
-DATABASE_URL = "postgresql://postgres:REDACTED@REDACTED/railway"
+import psycopg2
+
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 def parse_database_url(url):
     """Parse database URL into connection parameters"""

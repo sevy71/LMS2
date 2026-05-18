@@ -4,12 +4,13 @@ EMERGENCY FIX for rollover scenario
 This script directly connects to the database to reactivate players
 """
 
-import psycopg2
-from urllib.parse import urlparse
+import os
 import sys
+from urllib.parse import urlparse
 
-# Database URL from your .env.local file
-DATABASE_URL = "postgresql://postgres:REDACTED@REDACTED/railway"
+import psycopg2
+
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 def parse_database_url(url):
     """Parse database URL into connection parameters"""

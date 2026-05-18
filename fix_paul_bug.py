@@ -10,10 +10,7 @@ import psycopg2
 from urllib.parse import urlparse
 import os
 
-DATABASE_URL = os.environ.get(
-    'DATABASE_URL',
-    "postgresql://postgres:REDACTED@REDACTED/railway"
-)
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 
 def get_conn():
