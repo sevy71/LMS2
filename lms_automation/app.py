@@ -3783,6 +3783,28 @@ def process_round_results(round_id):
 
         round_obj = Round.query.get_or_404(round_id)
 
+        # IDEMPOTENCY GUARD: block re-processing if picks already have resolved outcomes.
+        # This prevents a double-submission from corrupting team_picked values or
+        # flipping player statuses a second time.
+        already_processed = Pick.query.filter(
+            Pick.round_id == round_id,
+            Pick.is_winner.isnot(None)
+        ).first()
+        if already_processed and round_obj.status == 'completed':
+            app.logger.warning(
+                f"IDEMPOTENCY BLOCK: Round {round_obj.round_number} results have already been "
+                f"processed (pick id={already_processed.id} has is_winner={already_processed.is_winner}). "
+                f"Rejecting duplicate submission."
+            )
+            return jsonify({
+                'success': False,
+                'error': (
+                    f'Round {round_obj.round_number} results have already been processed. '
+                    'Re-processing is not allowed to prevent data corruption.'
+                ),
+                'idempotency_blocked': True
+            }), 409
+
         # Re-validate stored fixtures before processing
         is_valid, reason = validate_stored_fixtures(round_obj)
         if not is_valid:

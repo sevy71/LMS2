@@ -61,7 +61,11 @@ class Fixture(db.Model):
 
 class Pick(db.Model):
     __tablename__ = 'picks'
-    
+
+    __table_args__ = (
+        db.UniqueConstraint('player_id', 'round_id', name='uq_picks_player_round'),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     player_id = db.Column(db.Integer, db.ForeignKey('players.id'), nullable=False)
     round_id = db.Column(db.Integer, db.ForeignKey('rounds.id'), nullable=False)
