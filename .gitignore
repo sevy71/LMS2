@@ -140,3 +140,5 @@ Thumbs.db
 
 # Chrome profile for Selenium
 /tmp/chrome_profile/
+# Local scheduler venv
+.venv/
