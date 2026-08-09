@@ -1837,6 +1837,7 @@ def apply_missed_picks(round_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/send_picks')
+@admin_required
 def send_picks():
     current_round = get_current_active_round()
     if not current_round:
@@ -3770,6 +3771,7 @@ def export_round_picks_xlsx():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/download-export/<filename>')
+@admin_required
 def download_export_file(filename):
     """Download an exported file from the exports directory"""
     try:
