@@ -98,7 +98,8 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from models import db, Player, Round, Fixture, Pick, PickToken, ReminderSchedule, CyclePayment
+from models import (db, Player, Round, Fixture, Pick, PickToken, ReminderSchedule,
+                    CyclePayment, PICK_DEADLINE_LEAD)
 
 
 # Initialize db with app
@@ -143,10 +144,6 @@ def set_round_special_measure(round_obj: Round, measure: str, note: str = None):
     except Exception as e:
         db.session.rollback()
         app.logger.error(f"Failed to set special measure for round_id={getattr(round_obj, 'id', None)}: {e}")
-
-# Picks close one hour before the first kickoff of the round.
-PICK_DEADLINE_LEAD = timedelta(hours=1)
-
 
 def apply_round_timing(round_obj: Round, earliest_kickoff: datetime, refresh_deadline: bool = True):
     """Record a round's first kickoff and derive its pick deadline from it.

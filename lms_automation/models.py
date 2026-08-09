@@ -5,6 +5,9 @@ import string
 
 db = SQLAlchemy()
 
+# Picks close one hour before the first kickoff of the round (see /rules).
+PICK_DEADLINE_LEAD = timedelta(hours=1)
+
 class Player(db.Model):
     __tablename__ = 'players'
 
@@ -41,6 +44,29 @@ class Round(db.Model):
     
     def __repr__(self):
         return f'<Round {self.round_number} (PL MD {self.pl_matchday})>'
+
+    def earliest_kickoff(self):
+        """Earliest kickoff across this round's fixtures, or None."""
+        earliest = None
+        for fixture in self.fixtures or []:
+            if fixture.date and fixture.time:
+                dt = datetime.combine(fixture.date, fixture.time)
+                if earliest is None or dt < earliest:
+                    earliest = dt
+        return earliest
+
+    @property
+    def pick_deadline(self):
+        """When picks close for this round.
+
+        end_date is the stored deadline and wins when set. Older rounds
+        created before it was derived automatically fall back to computing it
+        from the first kickoff, so callers get a consistent answer either way.
+        """
+        if self.end_date:
+            return self.end_date
+        kickoff = self.first_kickoff_at or self.earliest_kickoff()
+        return kickoff - PICK_DEADLINE_LEAD if kickoff else None
 
 class Fixture(db.Model):
     __tablename__ = 'fixtures'
@@ -217,36 +243,24 @@ class ReminderSchedule(db.Model):
     @staticmethod
     def create_reminders_for_round(round_id):
         """Create reminder schedules for all active players in a round.
-        Anchors reminders to first_kickoff_at when available, otherwise end_date.
-        Generates 4-hour and 2-hour reminders before the anchor time.
+        Reminders are anchored to the round's pick deadline, so a "4 hour" or
+        "2 hour" reminder means that much time left to pick.
         """
         round_obj = Round.query.get(round_id)
         if not round_obj:
             return False
 
-        # Determine anchor time (prefer first_kickoff_at; fallback to end_date)
-        anchor_time = round_obj.first_kickoff_at or round_obj.end_date
-        if not anchor_time:
-            # Try derive from fixtures
-            try:
-                fixtures = round_obj.fixtures or []
-                earliest = None
-                for fx in fixtures:
-                    if getattr(fx, 'date', None) and getattr(fx, 'time', None):
-                        dt = datetime.combine(fx.date, fx.time)
-                        if earliest is None or dt < earliest:
-                            earliest = dt
-                anchor_time = earliest
-            except Exception:
-                anchor_time = None
-        if not anchor_time:
+        # Anchor to the pick deadline, not kickoff. Anchoring to kickoff made
+        # the "2 hour" reminder arrive with only 1 hour left to pick, so the
+        # header contradicted the countdown in the message body.
+        deadline = round_obj.pick_deadline
+        if not deadline:
             return False
-        
+
         active_players = Player.query.filter_by(status='active').all()
-        
-        # Calculate reminder times relative to anchor
-        four_hour_reminder = anchor_time - timedelta(hours=4)
-        two_hour_reminder = anchor_time - timedelta(hours=2)
+
+        four_hour_reminder = deadline - timedelta(hours=4)
+        two_hour_reminder = deadline - timedelta(hours=2)
         
         reminders_created = 0
         
