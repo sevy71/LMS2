@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 
 class FootballDataAPI:
     def __init__(self):
-        self.api_token = os.environ.get('FOOTBALL_API_TOKEN', 'fffc0c77c6d24545958210fcec5f4f03')
+        self.api_token = os.environ.get('FOOTBALL_API_TOKEN', '')
         self.base_url = 'https://api.football-data.org/v4'
         self.headers = {
             'X-Auth-Token': self.api_token,
@@ -14,6 +14,24 @@ class FootballDataAPI:
         }
         # Premier League competition ID
         self.premier_league_id = 2021
+
+    @staticmethod
+    def current_season() -> str:
+        """Return the football-data.org season code for the season in play.
+
+        The API identifies a season by its starting year, so 2026/27 is '2026'.
+        A Premier League season starts in August and ends in May, so anything
+        from July onwards belongs to the season starting this calendar year;
+        January to June still belongs to the season that started last year.
+
+        FOOTBALL_SEASON overrides this when a season needs pinning by hand.
+        """
+        override = os.environ.get('FOOTBALL_SEASON')
+        if override:
+            return str(override).strip()
+
+        now = datetime.utcnow()
+        return str(now.year if now.month >= 7 else now.year - 1)
 
     def get_premier_league_fixtures(self, matchday: Optional[int] = None, season: str = None) -> Dict:
         """
@@ -29,11 +47,8 @@ class FootballDataAPI:
         try:
             url = f"{self.base_url}/competitions/{self.premier_league_id}/matches"
             
-            # Use current season (2025/26) if no season specified  
-            if season is None:
-                params = {'season': '2025'}  # Current 2025/26 season
-            else:
-                params = {'season': season}
+            # Fall back to the season currently in play if none specified
+            params = {'season': season or self.current_season()}
             
             if matchday:
                 params['matchday'] = matchday
@@ -260,12 +275,17 @@ class FootballDataAPI:
             return self._get_fallback_teams()
 
     def _get_fallback_teams(self) -> List[str]:
-        """Return fallback team list for 2025/26 season."""
+        """Return a last-resort team list, used only when the API is unreachable.
+
+        Promotion and relegation make this stale every summer — it is a
+        stopgap so the pick form still renders, not a source of truth.
+        Currently the 2026/27 Premier League.
+        """
         return [
-            "Arsenal FC", "Aston Villa FC", "AFC Bournemouth", "Brentford FC",
-            "Brighton & Hove Albion FC", "Chelsea FC", "Crystal Palace FC",
-            "Everton FC", "Fulham FC", "Ipswich Town FC", "Leicester City FC",
-            "Liverpool FC", "Manchester City FC", "Manchester United FC",
-            "Newcastle United FC", "Nottingham Forest FC", "Southampton FC",
-            "Tottenham Hotspur FC", "West Ham United FC", "Wolverhampton Wanderers FC"
+            "AFC Bournemouth", "Arsenal FC", "Aston Villa FC", "Brentford FC",
+            "Brighton & Hove Albion FC", "Chelsea FC", "Coventry City FC",
+            "Crystal Palace FC", "Everton FC", "Fulham FC", "Hull City AFC",
+            "Ipswich Town FC", "Leeds United FC", "Liverpool FC",
+            "Manchester City FC", "Manchester United FC", "Newcastle United FC",
+            "Nottingham Forest FC", "Sunderland AFC", "Tottenham Hotspur FC"
         ]
