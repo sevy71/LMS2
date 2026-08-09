@@ -1,0 +1,309 @@
+"""Background automation for Last Man Standing.
+
+Design note — this deliberately does not reimplement any game logic. Every
+rule (auto-picks, result processing, eliminations, rollover, season resume)
+already lives in app.py as admin endpoints that have run five cycles. This
+module drives those endpoints on a timer, in-process, as a virtual admin.
+That keeps one implementation of the rules rather than two that can drift.
+
+A single orchestrator tick inspects the current round and decides what is due,
+rather than several independent timers that could fire over each other.
+
+Run modes:
+    python -m lms_automation.scheduler --status   read-only; what would happen now
+    python -m lms_automation.scheduler --once     one orchestrator pass
+    python -m lms_automation.scheduler            run continuously
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from app import app, PICK_DEADLINE_LEAD  # noqa: E402
+from models import Pick, PickToken, Player, ReminderSchedule, Round, db  # noqa: E402
+
+logger = logging.getLogger("lms.scheduler")
+
+# How long after the last kickoff we keep polling for results before giving up
+# on a round and leaving it for an admin.
+RESULT_POLL_HORIZON = timedelta(hours=6)
+
+
+@dataclass
+class Plan:
+    """What the orchestrator intends to do on this tick."""
+
+    round_id: int | None = None
+    round_label: str = "—"
+    phase: str = "idle"
+    actions: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+def _admin_client():
+    """A Flask test client already authenticated as admin.
+
+    The scheduler runs in the same process as the app, so it drives the admin
+    endpoints directly instead of over HTTP. No password or network involved.
+    """
+    client = app.test_client()
+    with client.session_transaction() as sess:
+        sess["admin_logged_in"] = True
+    return client
+
+
+def _active_round() -> Round | None:
+    return (
+        Round.query.filter(Round.status == "active")
+        .order_by(Round.cycle_number.desc(), Round.round_number.desc())
+        .first()
+    )
+
+
+def _pick_counts(round_obj: Round) -> tuple[int, int]:
+    """Return (picks submitted, active players) for a round."""
+    active = Player.query.filter_by(status="active").count()
+    submitted = Pick.query.filter_by(round_id=round_obj.id).count()
+    return submitted, active
+
+
+def _last_kickoff(round_obj: Round) -> datetime | None:
+    latest = None
+    for fixture in round_obj.fixtures or []:
+        if fixture.date and fixture.time:
+            dt = datetime.combine(fixture.date, fixture.time)
+            if latest is None or dt > latest:
+                latest = dt
+    return latest
+
+
+def build_plan(now: datetime | None = None) -> Plan:
+    """Inspect current state and decide what is due. Performs no writes."""
+    now = now or datetime.utcnow()
+    plan = Plan()
+
+    round_obj = _active_round()
+    if round_obj is None:
+        plan.phase = "no-active-round"
+        plan.actions.append("rollover-check")
+        plan.actions.append("season-check")
+        plan.notes.append("No active round — checking whether one should be created.")
+        return plan
+
+    plan.round_id = round_obj.id
+    plan.round_label = f"Round {round_obj.round_number} (cycle {round_obj.cycle_number})"
+
+    deadline = round_obj.end_date
+    kickoff = round_obj.first_kickoff_at
+    if kickoff and not deadline:
+        deadline = kickoff - PICK_DEADLINE_LEAD
+
+    submitted, active_players = _pick_counts(round_obj)
+    plan.notes.append(f"{submitted}/{active_players} picks in")
+
+    if deadline is None:
+        plan.phase = "no-deadline"
+        plan.notes.append("Round has no deadline and no kickoff — needs fixtures loaded.")
+        return plan
+
+    plan.notes.append(f"deadline {deadline:%a %d %b %H:%M} UTC")
+
+    tokens = PickToken.query.filter_by(round_id=round_obj.id).count()
+    if tokens < active_players:
+        plan.actions.append("generate-tokens")
+        plan.notes.append(f"only {tokens} tokens for {active_players} active players")
+
+    # Reminders only make sense while picks are still open.
+    if now < deadline:
+        reminders = ReminderSchedule.query.filter_by(round_id=round_obj.id).count()
+        if reminders == 0:
+            plan.actions.append("schedule-reminders")
+
+    if now < deadline:
+        plan.phase = "open"
+        due = (
+            ReminderSchedule.query.filter(
+                ReminderSchedule.round_id == round_obj.id,
+                ReminderSchedule.is_sent.is_(False),
+                ReminderSchedule.scheduled_time <= now,
+            ).count()
+        )
+        if due:
+            plan.actions.append("send-reminders")
+            plan.notes.append(f"{due} reminders due")
+        plan.notes.append(f"{_humanise(deadline - now)} until picks close")
+        return plan
+
+    # Deadline has passed. Phases are driven by time, not by pick completeness:
+    # a round whose auto-picks fall short must still progress to results rather
+    # than stalling here forever.
+    missing = active_players - submitted
+
+    if kickoff and now < kickoff:
+        # The only window where auto-picks are allowed — app.py blocks them
+        # once the first ball is kicked.
+        plan.phase = "deadline-passed"
+        if missing > 0:
+            plan.actions.append("apply-missed-picks")
+            plan.notes.append(f"{missing} players without a pick")
+        return plan
+
+    if missing > 0:
+        plan.notes.append(
+            f"{missing} players still without a pick, and kickoff has passed — "
+            "auto-pick is no longer permitted, needs an admin"
+        )
+
+    last_kickoff = _last_kickoff(round_obj)
+    if last_kickoff and now < last_kickoff:
+        plan.phase = "in-play"
+        plan.notes.append(f"last kickoff {last_kickoff:%a %d %b %H:%M} UTC")
+        plan.actions.append("fetch-results")
+        return plan
+
+    if last_kickoff and now > last_kickoff + RESULT_POLL_HORIZON:
+        plan.notes.append("results still incomplete well after full time")
+
+    plan.phase = "results-due"
+    plan.actions.append("fetch-results")
+    plan.actions.append("process-results")
+    plan.actions.append("rollover-check")
+    return plan
+
+
+def _humanise(delta: timedelta) -> str:
+    total = int(delta.total_seconds())
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+ACTION_ROUTES = {
+    "generate-tokens": None,  # handled in-process, see run_action
+    "schedule-reminders": "/api/admin/schedule-reminders/{round_id}",
+    "send-reminders": None,  # needs the WhatsApp sender; not wired yet
+    "apply-missed-picks": "/api/admin/rounds/{round_id}/apply-missed-picks",
+    "fetch-results": "/api/rounds/{round_id}/auto-populate-results",
+    "process-results": "/api/rounds/{round_id}/process-results",
+    "rollover-check": "/api/admin/run-rollover-check",
+    "season-check": "/api/admin/check-new-season",
+}
+
+
+def run_action(action: str, plan: Plan, dry_run: bool = False) -> str:
+    """Execute one planned action via the existing admin endpoints."""
+    route = ACTION_ROUTES.get(action)
+
+    if action == "send-reminders":
+        return "skipped (WhatsApp sender not wired yet)"
+
+    if action == "generate-tokens":
+        if dry_run:
+            return "would generate missing pick tokens"
+        created = 0
+        for player in Player.query.filter_by(status="active").all():
+            token = PickToken.create_for_player_round(player.id, plan.round_id)
+            if token is not None:
+                created += 1
+        db.session.commit()
+        return f"ensured tokens for {created} players"
+
+    if route is None:
+        return "no route"
+
+    url = route.format(round_id=plan.round_id)
+    if dry_run:
+        if action == "apply-missed-picks":
+            url += "?dry_run=true"
+        else:
+            return f"would POST {url}"
+
+    client = _admin_client()
+    response = client.post(url)
+    body = response.get_json(silent=True) or {}
+    ok = body.get("success", response.status_code == 200)
+    detail = body.get("message") or body.get("error") or ""
+    return f"{'ok' if ok else 'FAILED'} [{response.status_code}] {detail}".strip()
+
+
+def tick(dry_run: bool = False) -> Plan:
+    """One orchestrator pass."""
+    with app.app_context():
+        plan = build_plan()
+        logger.info("phase=%s round=%s", plan.phase, plan.round_label)
+        for note in plan.notes:
+            logger.info("  note: %s", note)
+        for action in plan.actions:
+            result = run_action(action, plan, dry_run=dry_run)
+            logger.info("  %s -> %s", action, result)
+        return plan
+
+
+def print_status() -> None:
+    with app.app_context():
+        plan = build_plan()
+        now = datetime.utcnow()
+        print(f"\n  now (UTC)   {now:%a %d %b %Y %H:%M}")
+        print(f"  round       {plan.round_label}")
+        print(f"  phase       {plan.phase}")
+        for note in plan.notes:
+            print(f"              {note}")
+        if plan.actions:
+            print("  would run   " + ", ".join(plan.actions))
+        else:
+            print("  would run   nothing — waiting")
+        print()
+
+
+def run_forever(interval_minutes: int = 5) -> None:
+    from apscheduler.schedulers.blocking import BlockingScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    scheduler = BlockingScheduler(timezone="UTC")
+    scheduler.add_job(
+        tick,
+        trigger=IntervalTrigger(minutes=interval_minutes),
+        id="orchestrator",
+        max_instances=1,          # never let two passes overlap
+        coalesce=True,            # a backlog collapses to one run
+        next_run_time=datetime.now(),
+    )
+    logger.info("Scheduler started — orchestrator every %s minutes", interval_minutes)
+    scheduler.start()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Last Man Standing automation")
+    parser.add_argument("--status", action="store_true", help="read-only state report")
+    parser.add_argument("--once", action="store_true", help="run a single pass")
+    parser.add_argument("--dry-run", action="store_true", help="plan without writing")
+    parser.add_argument("--interval", type=int, default=5, help="minutes between passes")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+    )
+
+    if args.status:
+        print_status()
+    elif args.once:
+        tick(dry_run=args.dry_run)
+    else:
+        run_forever(args.interval)
+
+
+if __name__ == "__main__":
+    main()
