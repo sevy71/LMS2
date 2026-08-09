@@ -144,6 +144,33 @@ def set_round_special_measure(round_obj: Round, measure: str, note: str = None):
         db.session.rollback()
         app.logger.error(f"Failed to set special measure for round_id={getattr(round_obj, 'id', None)}: {e}")
 
+# Picks close one hour before the first kickoff of the round.
+PICK_DEADLINE_LEAD = timedelta(hours=1)
+
+
+def apply_round_timing(round_obj: Round, earliest_kickoff: datetime, refresh_deadline: bool = True):
+    """Record a round's first kickoff and derive its pick deadline from it.
+
+    The deadline moves with the fixture list rather than sitting at a fixed
+    time — a Friday-night opener and a Saturday lunchtime kickoff produce
+    different deadlines — so it must be recalculated whenever the round's
+    fixtures are loaded or reloaded.
+
+    end_date is the deadline the players see and the expiry that pick tokens
+    inherit; the auto-pick cutoff derives the same value from first_kickoff_at
+    independently. Setting both here keeps them in agreement: before this,
+    end_date was only ever populated by hand, so tokens silently fell back to
+    a fixed window that could expire days before the round even started.
+
+    Pass refresh_deadline=False to keep a deadline an admin set by hand.
+    """
+    if not earliest_kickoff:
+        return
+    round_obj.first_kickoff_at = earliest_kickoff
+    if refresh_deadline or not round_obj.end_date:
+        round_obj.end_date = earliest_kickoff - PICK_DEADLINE_LEAD
+
+
 # --- Phone number sanitization ---
 def sanitize_phone_number(phone_number):
     """Remove spaces, dashes, and parentheses from phone number, keeping only + and digits."""
@@ -703,8 +730,7 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
                     except Exception:
                         pass
 
-            if earliest_kickoff:
-                new_round.first_kickoff_at = earliest_kickoff
+            apply_round_timing(new_round, earliest_kickoff)
 
         except Exception as fixture_error:
             app.logger.warning(f"Failed to load fixtures for new round: {fixture_error}")
@@ -2253,8 +2279,10 @@ def handle_rounds():
                                     earliest_kickoff = dt
                         except Exception:
                             pass
-                    if earliest_kickoff:
-                        new_round.first_kickoff_at = earliest_kickoff
+                    # An admin-supplied end_date is an explicit override; otherwise
+                    # the deadline is derived from this round's first kickoff.
+                    apply_round_timing(new_round, earliest_kickoff,
+                                       refresh_deadline=end_date is None)
 
                     db.session.commit()
 
@@ -2599,8 +2627,7 @@ def add_fixtures_to_round(round_id):
                                 earliest_kickoff = dt
                     except Exception:
                         pass
-                if earliest_kickoff:
-                    round_obj.first_kickoff_at = earliest_kickoff
+                apply_round_timing(round_obj, earliest_kickoff)
                 
                 db.session.commit()
                 
@@ -2732,8 +2759,7 @@ def retry_load_fixtures(round_id):
                     pass
 
         # Update round status
-        if earliest_kickoff:
-            round_obj.first_kickoff_at = earliest_kickoff
+        apply_round_timing(round_obj, earliest_kickoff)
         round_obj.special_measure = None
         round_obj.special_note = None
         round_obj.status = 'pending'
@@ -2866,8 +2892,7 @@ def add_manual_fixtures(round_id):
                     pass
 
         # Update round
-        if earliest_kickoff:
-            round_obj.first_kickoff_at = earliest_kickoff
+        apply_round_timing(round_obj, earliest_kickoff)
 
         # Clear WAITING_FOR_FIXTURES if it was set
         if round_obj.special_measure == 'WAITING_FOR_FIXTURES':
@@ -4506,8 +4531,7 @@ def check_new_season():
         target_round.status = 'active'
         target_round.special_measure = None
         target_round.special_note = f'Resumed from season break. Matchday {next_matchday} loaded.'
-        if earliest_kickoff:
-            target_round.first_kickoff_at = earliest_kickoff
+        apply_round_timing(target_round, earliest_kickoff)
 
         db.session.commit()
 
