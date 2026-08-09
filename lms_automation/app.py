@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
 from flask_migrate import Migrate
 import os
+import secrets
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 import urllib.parse
@@ -20,7 +21,14 @@ else:
     load_dotenv()
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+_secret_key = os.environ.get('SECRET_KEY')
+if not _secret_key:
+    # No shared default: a published fallback lets anyone forge session cookies.
+    # A per-boot random key keeps the site up and only costs an admin re-login.
+    _secret_key = secrets.token_hex(32)
+    print("WARNING: SECRET_KEY is not set — using a random key for this process. "
+          "Admin sessions will not survive a restart until SECRET_KEY is configured.")
+app.config['SECRET_KEY'] = _secret_key
 app.config.setdefault('DISPLAY_TIMEZONE', os.environ.get('DISPLAY_TIMEZONE', 'Europe/London'))
 
 try:
@@ -337,7 +345,7 @@ def fetch_upcoming_fixtures(horizon_days: int = 45) -> dict:
         api = FootballDataAPI()
 
         # Fetch all fixtures for current season
-        fixtures_data = api.get_premier_league_fixtures(season='2025')
+        fixtures_data = api.get_premier_league_fixtures()
         matches = fixtures_data.get('matches', [])
 
         if not matches:
@@ -572,7 +580,7 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
             app.logger.info(f"Matchday {next_matchday} already used, searching for next available")
             from football_api import FootballDataAPI
             api = FootballDataAPI()
-            fixtures_data = api.get_premier_league_fixtures(season='2025')
+            fixtures_data = api.get_premier_league_fixtures()
 
             used_matchdays = {r.pl_matchday for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()}
             available_matchdays = set()
@@ -641,7 +649,7 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
         try:
             from football_api import FootballDataAPI
             api = FootballDataAPI()
-            fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday, season='2025')
+            fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday)
             formatted_fixtures = api.format_fixtures_for_db(fixtures_data, next_matchday)
 
             # Filter and validate fixtures
@@ -901,8 +909,13 @@ with app.app_context():
     _startup_db_ping()       # Verify connection first - raises RuntimeError on failure
     _ensure_minimum_schema() # Then ensure schema - connection errors will also raise
 
-# Admin authentication
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')  # Change this!
+# Admin authentication.
+# Deliberately no default: this repo is public, so any fallback here is a
+# published password. When ADMIN_PASSWORD is unset the admin area locks itself
+# rather than opening on a known value — the public site stays up regardless.
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD') or None
+if not ADMIN_PASSWORD:
+    print("WARNING: ADMIN_PASSWORD is not set — admin login is disabled until it is configured.")
 ADMIN_WHATSAPP = os.environ.get('ADMIN_WHATSAPP')  # Optional: admin WhatsApp number (e.g., +441234567890)
 
 # --- Helpers ---
@@ -1073,7 +1086,10 @@ def admin_required(f):
 def admin_login():
     if request.method == 'POST':
         password = request.form.get('password')
-        if password == ADMIN_PASSWORD:
+        if not ADMIN_PASSWORD:
+            flash('Admin access is not configured on this server', 'error')
+            return render_template('admin_login.html')
+        if password and secrets.compare_digest(password, ADMIN_PASSWORD):
             session['admin_logged_in'] = True
             session.permanent = True
             next_page = request.args.get('next') or url_for('admin_dashboard')
@@ -2323,7 +2339,7 @@ def get_available_matchdays():
             api = FootballDataAPI()
             print("Attempting to get real matchday data from API...")
             
-            fixtures_data = api.get_premier_league_fixtures(season='2025')
+            fixtures_data = api.get_premier_league_fixtures()
             if fixtures_data and fixtures_data.get('matches'):
                 print(f"Got {len(fixtures_data['matches'])} matches from API")
                 
@@ -2386,7 +2402,7 @@ def get_matchday_info(matchday):
             api = FootballDataAPI()
             print(f"Attempting to get real data for matchday {matchday}")
             
-            fixtures_data = api.get_premier_league_fixtures(matchday=matchday, season='2025')
+            fixtures_data = api.get_premier_league_fixtures(matchday=matchday)
             matches = fixtures_data.get('matches', [])
             
             if matches:
@@ -2909,7 +2925,7 @@ def get_premier_league_teams():
     try:
         from football_api import FootballDataAPI
         api = FootballDataAPI()
-        teams = api.get_season_teams(season='2025')
+        teams = api.get_season_teams()
 
         if teams:
             _pl_teams_cache['teams'] = teams
@@ -4404,7 +4420,7 @@ def check_new_season():
             app.logger.info(f"  Matchday {next_matchday} already used, finding next available")
             from football_api import FootballDataAPI
             api = FootballDataAPI()
-            fixtures_data = api.get_premier_league_fixtures(season='2025')
+            fixtures_data = api.get_premier_league_fixtures()
 
             available_matchdays = set()
             for match in fixtures_data.get('matches', []):
@@ -4432,7 +4448,7 @@ def check_new_season():
         # Load fixtures into the round
         from football_api import FootballDataAPI
         api = FootballDataAPI()
-        fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday, season='2025')
+        fixtures_data = api.get_premier_league_fixtures(matchday=next_matchday)
         formatted_fixtures = api.format_fixtures_for_db(fixtures_data, next_matchday)
 
         # Validate fixtures before attaching
