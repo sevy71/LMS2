@@ -22,7 +22,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -30,6 +30,11 @@ from app import app, PICK_DEADLINE_LEAD  # noqa: E402
 from models import Pick, PickToken, Player, ReminderSchedule, Round, db  # noqa: E402
 
 logger = logging.getLogger("lms.scheduler")
+
+# The WhatsApp sender runs as a separate local process on the Mac mini and
+# owns pacing and the WhatsApp session. Loopback only — see its README.
+SENDER_URL = os.environ.get("SENDER_URL", "http://127.0.0.1:8787")
+SENDER_TOKEN = os.environ.get("SENDER_TOKEN", "")
 
 # How long after the last kickoff we keep polling for results before giving up
 # on a round and leaving it for an admin.
@@ -202,12 +207,91 @@ ACTION_ROUTES = {
 }
 
 
+def sender_status() -> dict | None:
+    """Ask the local sender how it is doing. None if it is not reachable."""
+    import requests
+
+    try:
+        response = requests.get(
+            f"{SENDER_URL}/status",
+            headers={"x-sender-token": SENDER_TOKEN},
+            timeout=5,
+        )
+        return response.json() if response.ok else None
+    except Exception:
+        return None
+
+
+def send_due_reminders(dry_run: bool = False) -> str:
+    """Hand any due reminders to the local WhatsApp sender.
+
+    The sender accepts messages and delivers them on its own paced schedule,
+    so a 202 means queued, not delivered. Reminders are marked sent on
+    acceptance; genuine delivery failures surface in the sender's /status and
+    are reported on the next tick rather than silently vanishing.
+    """
+    import requests
+
+    if not SENDER_TOKEN:
+        return "skipped — SENDER_TOKEN not set"
+
+    # If the sender is in dry-run it accepts messages and delivers nothing.
+    # Marking reminders sent against that would silently consume them and
+    # leave players un-reminded, so treat it as a dry run here too.
+    status = sender_status()
+    if status is None:
+        return "skipped — sender unreachable"
+    if status.get("dryRun"):
+        dry_run = True
+    elif not status.get("ready"):
+        return "skipped — sender not paired to WhatsApp yet"
+
+    client = _admin_client()
+    response = client.get("/api/admin/due-reminders")
+    payload = response.get_json(silent=True) or {}
+    due = payload.get("due_reminders") or []
+
+    if not due:
+        return "no reminders due"
+
+    if dry_run:
+        who = ", ".join(r.get("player_name", "?") for r in due[:5])
+        more = f" (+{len(due) - 5} more)" if len(due) > 5 else ""
+        return f"would send {len(due)} reminders to {who}{more}"
+
+    queued, failed = 0, 0
+    for reminder in due:
+        number = reminder.get("whatsapp_number")
+        message = reminder.get("message")
+        if not number or not message:
+            failed += 1
+            continue
+        try:
+            sent = requests.post(
+                f"{SENDER_URL}/send",
+                json={"to": number, "text": message},
+                headers={"x-sender-token": SENDER_TOKEN},
+                timeout=10,
+            )
+            if sent.status_code == 202:
+                queued += 1
+                client.post(f"/api/admin/mark-reminder-sent/{reminder['reminder_id']}")
+            else:
+                failed += 1
+                logger.warning("sender rejected %s: %s", number, sent.text[:120])
+        except Exception as exc:
+            failed += 1
+            logger.warning("sender unreachable for %s: %s", number, exc)
+
+    return f"queued {queued} reminders" + (f", {failed} failed" if failed else "")
+
+
 def run_action(action: str, plan: Plan, dry_run: bool = False) -> str:
     """Execute one planned action via the existing admin endpoints."""
     route = ACTION_ROUTES.get(action)
 
     if action == "send-reminders":
-        return "skipped (WhatsApp sender not wired yet)"
+        return send_due_reminders(dry_run=dry_run)
 
     if action == "generate-tokens":
         if dry_run:
@@ -264,6 +348,20 @@ def print_status() -> None:
             print("  would run   " + ", ".join(plan.actions))
         else:
             print("  would run   nothing — waiting")
+
+        status = sender_status()
+        if status is None:
+            print(f"  sender      unreachable at {SENDER_URL}")
+        else:
+            bits = [
+                "paired" if status.get("ready") else "NOT PAIRED",
+                "dry-run" if status.get("dryRun") else "live",
+                f"{status.get('queued', 0)} queued",
+                f"{status.get('sent', 0)} sent",
+            ]
+            if status.get("failed"):
+                bits.append(f"{status['failed']} FAILED")
+            print("  sender      " + ", ".join(bits))
         print()
 
 
@@ -278,7 +376,10 @@ def run_forever(interval_minutes: int = 5) -> None:
         id="orchestrator",
         max_instances=1,          # never let two passes overlap
         coalesce=True,            # a backlog collapses to one run
-        next_run_time=datetime.now(),
+        # Must be timezone-aware: the scheduler runs in UTC and the mini is on
+        # BST, so a naive now() is read as UTC and defers the first tick by an
+        # hour — silently, and by two hours' worth of confusion in winter.
+        next_run_time=datetime.now(dt_timezone.utc),
     )
     logger.info("Scheduler started — orchestrator every %s minutes", interval_minutes)
     scheduler.start()

@@ -305,11 +305,23 @@ class ReminderSchedule(db.Model):
     
     @staticmethod
     def get_pending_reminders():
-        """Get all reminders that are due and haven't been sent"""
-        return ReminderSchedule.query.filter(
-            ReminderSchedule.is_sent == False,
-            ReminderSchedule.scheduled_time <= datetime.utcnow()
-        ).all()
+        """Reminders that are due, unsent, and belong to a round still in play.
+
+        The round filter matters: without it an unsent reminder from a
+        finished round stays "due" indefinitely, so a round that ended with
+        stragglers would later have players chased about a match from months
+        ago.
+        """
+        return (
+            ReminderSchedule.query
+            .join(Round, Round.id == ReminderSchedule.round_id)
+            .filter(
+                ReminderSchedule.is_sent == False,
+                ReminderSchedule.scheduled_time <= datetime.utcnow(),
+                Round.status == 'active',
+            )
+            .all()
+        )
     
     def mark_as_sent(self):
         """Mark reminder as sent"""
