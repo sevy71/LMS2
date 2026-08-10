@@ -8,6 +8,9 @@ db = SQLAlchemy()
 # Picks close one hour before the first kickoff of the round (see /rules).
 PICK_DEADLINE_LEAD = timedelta(hours=1)
 
+# How far ahead of the deadline the mid-week nudge goes out.
+NUDGE_LEAD = timedelta(days=3)
+
 class Player(db.Model):
     __tablename__ = 'players'
 
@@ -258,48 +261,45 @@ class ReminderSchedule(db.Model):
             return False
 
         active_players = Player.query.filter_by(status='active').all()
+        now = datetime.utcnow()
 
-        four_hour_reminder = deadline - timedelta(hours=4)
-        two_hour_reminder = deadline - timedelta(hours=2)
-        
+        # Four points of contact per round. The later three are only actually
+        # delivered to players who still have not picked — get_due_reminders
+        # skips anyone who has.
+        schedule = [
+            ('round_open', now),
+            ('nudge', deadline - NUDGE_LEAD),
+            ('4_hour', deadline - timedelta(hours=4)),
+            ('2_hour', deadline - timedelta(hours=2)),
+        ]
+
+        # A round created close to its deadline would fire the opening message
+        # and the nudge together, which reads as a glitch. Drop the nudge if it
+        # would land on top of the announcement.
+        if (deadline - NUDGE_LEAD) - now < timedelta(hours=12):
+            schedule = [entry for entry in schedule if entry[0] != 'nudge']
+
         reminders_created = 0
-        
+
         for player in active_players:
-            # Check if reminders already exist
-            existing_4h = ReminderSchedule.query.filter_by(
-                player_id=player.id, 
-                round_id=round_id, 
-                reminder_type='4_hour'
-            ).first()
-            
-            existing_2h = ReminderSchedule.query.filter_by(
-                player_id=player.id, 
-                round_id=round_id, 
-                reminder_type='2_hour'
-            ).first()
-            
-            # Create 4-hour reminder (create even if scheduled time is in the past so it shows as due)
-            if not existing_4h:
-                reminder_4h = ReminderSchedule(
+            for reminder_type, scheduled_time in schedule:
+                existing = ReminderSchedule.query.filter_by(
                     player_id=player.id,
                     round_id=round_id,
-                    reminder_type='4_hour',
-                    scheduled_time=four_hour_reminder
-                )
-                db.session.add(reminder_4h)
-                reminders_created += 1
-            
-            # Create 2-hour reminder (create even if scheduled time is in the past so it shows as due)
-            if not existing_2h:
-                reminder_2h = ReminderSchedule(
+                    reminder_type=reminder_type,
+                ).first()
+                if existing:
+                    continue
+                # Created even when the time has passed, so it shows as due
+                # rather than being silently skipped.
+                db.session.add(ReminderSchedule(
                     player_id=player.id,
                     round_id=round_id,
-                    reminder_type='2_hour',
-                    scheduled_time=two_hour_reminder
-                )
-                db.session.add(reminder_2h)
+                    reminder_type=reminder_type,
+                    scheduled_time=scheduled_time,
+                ))
                 reminders_created += 1
-        
+
         db.session.commit()
         return reminders_created
     

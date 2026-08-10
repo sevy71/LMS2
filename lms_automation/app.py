@@ -5389,9 +5389,10 @@ class WhatsAppReminder:
         if not player.whatsapp_number:
             return None
 
-        # Determine anchor (kickoff) and cutoff (1 hour before kickoff) times
-        anchor_time = getattr(round_obj, 'first_kickoff_at', None) or getattr(round_obj, 'end_date', None)
-        cutoff_time = anchor_time - timedelta(hours=1) if anchor_time else None
+        # Use the round's own deadline rather than recomputing it, so a message
+        # can never quote a different time to the one actually enforced — an
+        # admin-set end_date would otherwise be ignored here.
+        cutoff_time = round_obj.pick_deadline
 
         def _format_time_remaining(target):
             """Return a friendly countdown like '90 minutes' or '2 hours 15 minutes'."""
@@ -5430,8 +5431,21 @@ class WhatsAppReminder:
         pick_url = pick_token.get_pick_url(base_url)
         dashboard_url = f"{base_url}/dashboard/{pick_token.token}"
 
+        # Deadline in the players' own timezone, for the opening message where
+        # a countdown ("3 days left") is less useful than an actual date.
+        deadline_str = None
+        try:
+            if cutoff_time:
+                deadline_str = to_local(cutoff_time).strftime('%A %d %B, %H:%M')
+        except Exception:
+            deadline_str = None
+
         # Customize message based on reminder type
-        if reminder_type == '4_hour':
+        if reminder_type == 'round_open':
+            urgency = f"⚽ Round {round_obj.round_number} is open"
+        elif reminder_type == 'nudge':
+            urgency = "👋 Still need your pick"
+        elif reminder_type == '4_hour':
             urgency = "⏰ 4 Hour Reminder"
         elif reminder_type == '2_hour':
             urgency = "🚨 2 Hour Reminder"
@@ -5442,8 +5456,43 @@ class WhatsAppReminder:
             time_msg = f"You have about {time_remaining} left to submit your pick for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday})."
         else:
             time_msg = f"Time is running out to submit your pick for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday})!"
-        
-        message = f"""{urgency}
+
+        if reminder_type == 'round_open':
+            when = f"Picks close {deadline_str}." if deadline_str else "Picks close one hour before the first kickoff."
+            message = f"""{urgency}
+
+Hi {player.name}! 👋
+
+Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday}) is now open.
+
+{when}
+Miss it and a team gets picked for you.
+
+🎯 Make your pick: {pick_url}
+
+📊 Check your dashboard: {dashboard_url}
+
+Good luck! 🍀
+Last Man Standing"""
+        elif reminder_type == 'nudge':
+            when = f"Picks close {deadline_str}." if deadline_str else "Picks close soon."
+            message = f"""{urgency}
+
+Hi {player.name}! 👋
+
+You haven't picked yet for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday}).
+
+{when}
+Plenty of time — but easy to forget.
+
+🎯 Make your pick: {pick_url}
+
+📊 Check your dashboard: {dashboard_url}
+
+Good luck! 🍀
+Last Man Standing"""
+        else:
+            message = f"""{urgency}
 
 Hi {player.name}! 👋
 
