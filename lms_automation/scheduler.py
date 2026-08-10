@@ -22,7 +22,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -235,6 +235,17 @@ def send_due_reminders(dry_run: bool = False) -> str:
     if not SENDER_TOKEN:
         return "skipped — SENDER_TOKEN not set"
 
+    # If the sender is in dry-run it accepts messages and delivers nothing.
+    # Marking reminders sent against that would silently consume them and
+    # leave players un-reminded, so treat it as a dry run here too.
+    status = sender_status()
+    if status is None:
+        return "skipped — sender unreachable"
+    if status.get("dryRun"):
+        dry_run = True
+    elif not status.get("ready"):
+        return "skipped — sender not paired to WhatsApp yet"
+
     client = _admin_client()
     response = client.get("/api/admin/due-reminders")
     payload = response.get_json(silent=True) or {}
@@ -365,7 +376,10 @@ def run_forever(interval_minutes: int = 5) -> None:
         id="orchestrator",
         max_instances=1,          # never let two passes overlap
         coalesce=True,            # a backlog collapses to one run
-        next_run_time=datetime.now(),
+        # Must be timezone-aware: the scheduler runs in UTC and the mini is on
+        # BST, so a naive now() is read as UTC and defers the first tick by an
+        # hour — silently, and by two hours' worth of confusion in winter.
+        next_run_time=datetime.now(dt_timezone.utc),
     )
     logger.info("Scheduler started — orchestrator every %s minutes", interval_minutes)
     scheduler.start()
