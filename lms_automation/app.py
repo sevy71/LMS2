@@ -932,6 +932,9 @@ with app.app_context():
     _startup_db_ping()       # Verify connection first - raises RuntimeError on failure
     _ensure_minimum_schema() # Then ensure schema - connection errors will also raise
 
+# Public origin used when building links for players. Overridden by BASE_URL.
+PUBLIC_BASE_URL_FALLBACK = 'https://web-production-c715.up.railway.app'
+
 # Admin authentication.
 # Deliberately no default: this repo is public, so any fallback here is a
 # published password. When ADMIN_PASSWORD is unset the admin area locks itself
@@ -5416,12 +5419,25 @@ class WhatsAppReminder:
 
         time_remaining = _format_time_remaining(cutoff_time)
 
-        # Get base URL - use request context if available, otherwise fall back to env var
-        try:
-            base_url = os.environ.get('BASE_URL') or request.url_root.rstrip('/')
-        except RuntimeError:
-            # Outside request context
-            base_url = os.environ.get('BASE_URL', 'https://web-production-c715.up.railway.app')
+        # BASE_URL wins. Falling back to the request host looked reasonable
+        # until the scheduler started driving these endpoints through Flask's
+        # test client, whose url_root is "http://localhost/" — every pick link
+        # it sent pointed at the player's own phone and simply failed. A host
+        # that only resolves on this machine must never reach a player, so
+        # loopback is rejected outright rather than used.
+        base_url = os.environ.get('BASE_URL')
+        if not base_url:
+            try:
+                candidate = request.url_root.rstrip('/')
+            except RuntimeError:
+                candidate = ''
+            if candidate and not any(h in candidate for h in ('localhost', '127.0.0.1', '0.0.0.0')):
+                base_url = candidate
+        if not base_url:
+            base_url = PUBLIC_BASE_URL_FALLBACK
+            app.logger.warning(
+                "BASE_URL not set and no usable request host — falling back to %s", base_url
+            )
         # Ensure HTTPS for production
         if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
             base_url = base_url.replace('http://', 'https://')
