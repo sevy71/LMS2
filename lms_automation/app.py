@@ -94,6 +94,17 @@ print(f"[DB CONFIG] Source: {_db_source}")
 print(f"[DB CONFIG] URI: {_redact_db_uri(app.config['SQLALCHEMY_DATABASE_URI'])}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# The scheduler runs on a Mac mini that sleeps. On wake, pooled connections
+# have long since been closed at the far end, and the first query of the day
+# would fail on a dead socket — losing that tick, which around a deadline is a
+# lost auto-pick window. pre_ping checks a connection before handing it out and
+# transparently replaces a dead one; recycle retires connections before Railway
+# times them out.
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+}
+
 # Import models and db
 import sys
 import os

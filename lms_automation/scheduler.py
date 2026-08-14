@@ -453,6 +453,12 @@ def run_forever(interval_minutes: int = 5) -> None:
         id="orchestrator",
         max_instances=1,          # never let two passes overlap
         coalesce=True,            # a backlog collapses to one run
+        # APScheduler discards a run whose time passed by more than this, and
+        # the default is one second. On a machine that sleeps, every tick
+        # missed while asleep would be thrown away and nothing would happen
+        # until the next interval. An hour's grace means waking runs a tick
+        # immediately; coalesce keeps that to a single catch-up pass.
+        misfire_grace_time=3600,
         # Must be timezone-aware: the scheduler runs in UTC and the mini is on
         # BST, so a naive now() is read as UTC and defers the first tick by an
         # hour — silently, and by two hours' worth of confusion in winter.
