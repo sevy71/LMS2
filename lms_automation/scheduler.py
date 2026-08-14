@@ -259,31 +259,101 @@ def send_due_reminders(dry_run: bool = False) -> str:
         more = f" (+{len(due) - 5} more)" if len(due) > 5 else ""
         return f"would send {len(due)} reminders to {who}{more}"
 
-    queued, failed = 0, 0
+    queued, rejected, duplicate = 0, 0, 0
     for reminder in due:
         number = reminder.get("whatsapp_number")
         message = reminder.get("message")
         if not number or not message:
-            failed += 1
+            rejected += 1
             continue
         try:
-            sent = requests.post(
+            response = requests.post(
                 f"{SENDER_URL}/send",
-                json={"to": number, "text": message},
+                json={
+                    "to": number,
+                    "text": message,
+                    # The sender reports this back once the message has actually
+                    # gone, which is when the reminder gets marked sent.
+                    "ref": reminder["reminder_id"],
+                },
                 headers={"x-sender-token": SENDER_TOKEN},
                 timeout=10,
             )
-            if sent.status_code == 202:
+            if response.status_code == 202:
                 queued += 1
-                client.post(f"/api/admin/mark-reminder-sent/{reminder['reminder_id']}")
+            elif response.status_code == 409:
+                # Already queued or awaiting acknowledgement — not an error.
+                duplicate += 1
             else:
-                failed += 1
-                logger.warning("sender rejected %s: %s", number, sent.text[:120])
+                rejected += 1
+                logger.warning("sender rejected %s: %s", number, response.text[:120])
         except Exception as exc:
-            failed += 1
+            rejected += 1
             logger.warning("sender unreachable for %s: %s", number, exc)
 
-    return f"queued {queued} reminders" + (f", {failed} failed" if failed else "")
+    parts = [f"queued {queued}"]
+    if duplicate:
+        parts.append(f"{duplicate} already in flight")
+    if rejected:
+        parts.append(f"{rejected} rejected")
+    return ", ".join(parts)
+
+
+def reconcile_deliveries() -> str:
+    """Mark reminders sent based on what the sender actually delivered.
+
+    Nothing is marked on the 202 from /send: that only means the message was
+    accepted onto a queue. Treating acceptance as delivery marked 48 players as
+    announced when none had been contacted, three times over on 14 Aug — once
+    because the sender crashed with the queue in memory, once because the
+    WhatsApp session died mid-send, and once because a keystroke permission was
+    missing. A message that failed stays pending and is retried on a later tick.
+    """
+    import requests
+
+    if not SENDER_TOKEN:
+        return "skipped — SENDER_TOKEN not set"
+
+    try:
+        response = requests.get(
+            f"{SENDER_URL}/completed",
+            headers={"x-sender-token": SENDER_TOKEN},
+            timeout=10,
+        )
+        items = (response.json() or {}).get("items", []) if response.ok else []
+    except Exception as exc:
+        return f"sender unreachable: {exc}"
+
+    if not items:
+        return "nothing to reconcile"
+
+    client = _admin_client()
+    marked, failed, handled = 0, 0, []
+    for item in items:
+        handled.append(item["id"])
+        if item.get("outcome") == "sent":
+            client.post(f"/api/admin/mark-reminder-sent/{item['ref']}")
+            marked += 1
+        else:
+            failed += 1
+            logger.warning(
+                "delivery failed for reminder %s, left pending: %s",
+                item.get("ref"), (item.get("error") or "")[:120],
+            )
+
+    try:
+        requests.post(
+            f"{SENDER_URL}/completed/ack",
+            json={"ids": handled},
+            headers={"x-sender-token": SENDER_TOKEN},
+            timeout=10,
+        )
+    except Exception as exc:
+        # Not acknowledged means they come back next tick; marking is
+        # idempotent, so a duplicate pass is harmless.
+        logger.warning("could not acknowledge outcomes: %s", exc)
+
+    return f"marked {marked} delivered" + (f", {failed} failed and left pending" if failed else "")
 
 
 def run_action(action: str, plan: Plan, dry_run: bool = False) -> str:
@@ -325,6 +395,13 @@ def run_action(action: str, plan: Plan, dry_run: bool = False) -> str:
 def tick(dry_run: bool = False) -> Plan:
     """One orchestrator pass."""
     with app.app_context():
+        # Collect delivery outcomes before planning, so picks and pending
+        # counts reflect what has actually been sent.
+        if SENDER_TOKEN:
+            outcome = reconcile_deliveries()
+            if outcome not in ("nothing to reconcile",):
+                logger.info("reconcile -> %s", outcome)
+
         plan = build_plan()
         logger.info("phase=%s round=%s", plan.phase, plan.round_label)
         for note in plan.notes:
