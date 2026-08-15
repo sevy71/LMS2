@@ -222,6 +222,59 @@ def sender_status() -> dict | None:
         return None
 
 
+def _digits(number: str) -> str:
+    """Bare international digits, so one phone written several ways groups as one.
+
+    Mirrors the sender's normalisation: without promoting 07... to 447..., a
+    household member registered in national format would be treated as a
+    separate phone and get their own message — reintroducing the very
+    same-chat overwrite this grouping exists to prevent.
+    """
+    digits = "".join(ch for ch in str(number or "") if ch.isdigit())
+    if digits.startswith("00"):
+        digits = digits[2:]
+    elif digits.startswith("0"):
+        digits = "44" + digits[1:]
+    return digits
+
+
+def _combined_message(group: list[dict]) -> str:
+    """One message covering everyone who shares a handset.
+
+    Sending a household a message each meant several sends to the same chat,
+    and a failed send there is overwritten by the next one — leaving no draft
+    and no evidence anything went missing.
+    """
+    first = group[0]
+    round_number = first.get("round_number")
+    deadline = first.get("deadline_local")
+    heading = {
+        "round_open": f"⚽ Round {round_number} is open",
+        "nudge": "👋 Picks still needed",
+        "4_hour": "⏰ 4 Hour Reminder",
+        "2_hour": "🚨 2 Hour Reminder",
+    }.get(first.get("reminder_type"), "📝 Reminder")
+
+    lines = [
+        heading,
+        "",
+        f"{len(group)} picks still needed on this phone for Round {round_number}:",
+        "",
+    ]
+    for reminder in sorted(group, key=lambda r: r.get("player_name") or ""):
+        lines.append(f"{reminder.get('player_name')}")
+        lines.append(f"🎯 {reminder.get('pick_url')}")
+        lines.append("")
+
+    if deadline:
+        lines.append(f"Picks close {deadline}.")
+    lines.append("Miss it and a team gets picked for you.")
+    lines.append("")
+    lines.append("Good luck! 🍀")
+    lines.append("Last Man Standing")
+    return "\n".join(lines)
+
+
 def send_due_reminders(dry_run: bool = False) -> str:
     """Hand any due reminders to the local WhatsApp sender.
 
@@ -259,13 +312,33 @@ def send_due_reminders(dry_run: bool = False) -> str:
         more = f" (+{len(due) - 5} more)" if len(due) > 5 else ""
         return f"would send {len(due)} reminders to {who}{more}"
 
-    queued, rejected, duplicate = 0, 0, 0
+    # One message per phone, not per player. Several households share a
+    # handset, and sending them a message each meant consecutive sends to the
+    # same chat — where a failed send leaves a draft that the next message
+    # silently overwrites. That is how Phil and Frankie Warburton's
+    # announcements vanished without even leaving a draft behind, and it also
+    # blinds the only check available (scanning for "Draft:" in the chat list).
+    grouped: dict[str, list[dict]] = {}
     for reminder in due:
         number = reminder.get("whatsapp_number")
-        message = reminder.get("message")
-        if not number or not message:
-            rejected += 1
+        if not number or not reminder.get("message"):
             continue
+        grouped.setdefault(_digits(number), []).append(reminder)
+
+    queued, rejected, duplicate, combined = 0, 0, 0, 0
+    rejected += sum(
+        1 for r in due if not r.get("whatsapp_number") or not r.get("message")
+    )
+
+    for _, group in grouped.items():
+        number = group[0]["whatsapp_number"]
+        if len(group) == 1:
+            message = group[0]["message"]
+            ref = str(group[0]["reminder_id"])
+        else:
+            message = _combined_message(group)
+            ref = ",".join(str(r["reminder_id"]) for r in group)
+            combined += 1
         try:
             response = requests.post(
                 f"{SENDER_URL}/send",
@@ -273,8 +346,10 @@ def send_due_reminders(dry_run: bool = False) -> str:
                     "to": number,
                     "text": message,
                     # The sender reports this back once the message has actually
-                    # gone, which is when the reminder gets marked sent.
-                    "ref": reminder["reminder_id"],
+                    # gone, which is when the reminders get marked sent. For a
+                    # shared handset this is several reminder ids joined by
+                    # commas — one message covers the whole household.
+                    "ref": ref,
                 },
                 headers={"x-sender-token": SENDER_TOKEN},
                 timeout=10,
@@ -292,6 +367,8 @@ def send_due_reminders(dry_run: bool = False) -> str:
             logger.warning("sender unreachable for %s: %s", number, exc)
 
     parts = [f"queued {queued}"]
+    if combined:
+        parts.append(f"{combined} combined for shared phones")
     if duplicate:
         parts.append(f"{duplicate} already in flight")
     if rejected:
@@ -332,8 +409,11 @@ def reconcile_deliveries() -> str:
     for item in items:
         handled.append(item["id"])
         if item.get("outcome") == "sent":
-            client.post(f"/api/admin/mark-reminder-sent/{item['ref']}")
-            marked += 1
+            # A ref may cover several reminders when one message went to a
+            # shared handset.
+            for reminder_id in str(item["ref"]).split(","):
+                client.post(f"/api/admin/mark-reminder-sent/{reminder_id.strip()}")
+                marked += 1
         else:
             failed += 1
             logger.warning(

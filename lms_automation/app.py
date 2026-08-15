@@ -5549,6 +5549,12 @@ Last Man Standing"""
             'message': message,
             'whatsapp_link': whatsapp_link,
             'reminder_type': reminder_type,
+            # Exposed separately so callers can compose a combined message for
+            # a household sharing one phone, rather than parsing them back out
+            # of the rendered text.
+            'pick_url': pick_url,
+            'dashboard_url': dashboard_url,
+            'deadline_local': deadline_str,
             'round_number': round_obj.round_number
         }
     
