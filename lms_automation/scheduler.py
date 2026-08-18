@@ -297,7 +297,15 @@ def send_due_reminders(dry_run: bool = False) -> str:
     if status.get("dryRun"):
         dry_run = True
     elif not status.get("ready"):
-        return "skipped — sender not paired to WhatsApp yet"
+        # Say which condition is blocking. This previously reported "not paired
+        # to WhatsApp yet", wording left over from the whatsapp-web.js client
+        # that no longer exists — so three hours of a locked screen on 18 Aug
+        # read as a pairing problem and sent the diagnosis the wrong way.
+        if status.get("screenLocked"):
+            return "BLOCKED — screen is locked; reminders wait until it is unlocked"
+        if not status.get("whatsappRunning"):
+            return "BLOCKED — WhatsApp Desktop is not running"
+        return f"BLOCKED — sender not ready: {status.get('lastError') or 'unknown'}"
 
     client = _admin_client()
     response = client.get("/api/admin/due-reminders")
