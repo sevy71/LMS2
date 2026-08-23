@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone as dt_timezone
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from app import app, PICK_DEADLINE_LEAD  # noqa: E402
-from models import Pick, PickToken, Player, ReminderSchedule, Round, db  # noqa: E402
+from models import Fixture, Pick, PickToken, Player, ReminderSchedule, Round, db  # noqa: E402
 
 logger = logging.getLogger("lms.scheduler")
 
@@ -450,6 +450,35 @@ def run_action(action: str, plan: Plan, dry_run: bool = False) -> str:
 
     if action == "send-reminders":
         return send_due_reminders(dry_run=dry_run)
+
+    if action == "process-results":
+        # process-results does not read scores from the database — it requires
+        # them in the request body. Calling it without one returned 415, so
+        # this step could never have succeeded: the round would have sat
+        # unprocessed and never rolled over. Scores are already in the fixtures
+        # by this point, put there by fetch-results, so build the payload from
+        # whichever fixtures have actually been played.
+        played = Fixture.query.filter(
+            Fixture.round_id == plan.round_id,
+            Fixture.home_score.isnot(None),
+            Fixture.away_score.isnot(None),
+        ).all()
+        if not played:
+            return "no completed fixtures to process"
+        payload = {
+            "results": [
+                {"fixture_id": f.id, "home_score": f.home_score, "away_score": f.away_score}
+                for f in played
+            ]
+        }
+        if dry_run:
+            return f"would process {len(played)} completed fixtures"
+        client = _admin_client()
+        response = client.post(f"/api/rounds/{plan.round_id}/process-results", json=payload)
+        body = response.get_json(silent=True) or {}
+        ok = body.get("success", response.status_code == 200)
+        detail = body.get("message") or body.get("error") or ""
+        return f"{'ok' if ok else 'FAILED'} [{response.status_code}] {len(played)} fixtures {detail}".strip()
 
     if action == "generate-tokens":
         if dry_run:
