@@ -529,8 +529,15 @@ def create_next_round(dry_run: bool = False) -> str:
             f"for {active_players} active players"
         )
 
+    # POST /api/rounds defaults to 'pending', and the scheduler only ever looks
+    # for active rounds — so a round created without this is invisible to the
+    # automation: no tokens, no reminders, no announcement, and the log simply
+    # reports it as still pending every five minutes. The rollover path creates
+    # its rounds active for the same reason.
     client = _admin_client()
-    response = client.post("/api/rounds", json={"pl_matchday": matchday})
+    response = client.post(
+        "/api/rounds", json={"pl_matchday": matchday, "status": "active"}
+    )
     body = response.get_json(silent=True) or {}
     if response.status_code == 200 and body.get("success"):
         return f"created round on matchday {matchday} ({active_players} players)"
