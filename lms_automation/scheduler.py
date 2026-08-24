@@ -450,6 +450,178 @@ def reconcile_deliveries() -> str:
     return f"marked {marked} delivered" + (f", {failed} failed and left pending" if failed else "")
 
 
+# Where the round digests are sent. These go to the organiser, who forwards
+# them to the group. Posting to the group directly was tried and rejected:
+# driving WhatsApp's search to open a group chat raced with the keystrokes and
+# sent a fragment of the search text into the group as a message. A timing
+# glitch there is instantly public to every player, so the irreversible step
+# stays with a human.
+ADMIN_WHATSAPP = os.environ.get("ADMIN_WHATSAPP", "")
+
+# Which digests have already gone out, so a restart or a repeated tick does not
+# send them twice. Kept beside the app rather than in the database to avoid a
+# schema change for bookkeeping.
+PUBLISH_STATE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", ".published.json"
+)
+
+
+def _published() -> dict:
+    import json
+
+    try:
+        with open(PUBLISH_STATE_PATH) as fh:
+            return json.load(fh)
+    except Exception:
+        return {"results": [], "table": []}
+
+
+def _mark_published(kind: str, round_id: int) -> None:
+    import json
+
+    state = _published()
+    state.setdefault(kind, []).append(round_id)
+    try:
+        with open(PUBLISH_STATE_PATH, "w") as fh:
+            json.dump(state, fh)
+    except Exception as exc:
+        logger.warning("could not record published digest: %s", exc)
+
+
+def results_digest(round_obj: Round) -> str:
+    """Who went out and who survived, ready to forward to the group."""
+    picks = (
+        Pick.query.filter_by(round_id=round_obj.id)
+        .join(Player, Player.id == Pick.player_id)
+        .add_columns(Player.name)
+        .all()
+    )
+    out, through = [], []
+    for pick, name in picks:
+        (through if pick.is_winner else out).append((name, pick.team_picked))
+
+    still_in = Player.query.filter_by(status="active").count()
+
+    lines = [
+        f"⚽ Round {round_obj.round_number} results",
+        "",
+    ]
+    if out:
+        lines.append(f"❌ Out ({len(out)}):")
+        for name, team in sorted(out):
+            lines.append(f"• {name} — {team}")
+        lines.append("")
+    else:
+        lines.append("❌ Nobody went out this round.")
+        lines.append("")
+
+    lines.append(f"✅ Through: {len(through)}")
+    lines.append(f"👥 Still in the game: {still_in}")
+    return "\n".join(lines)
+
+
+def picks_table(round_obj: Round) -> str:
+    """Every player's pick for the round, as a monospaced table."""
+    rows = (
+        Pick.query.filter_by(round_id=round_obj.id)
+        .join(Player, Player.id == Pick.player_id)
+        .add_columns(Player.name)
+        .all()
+    )
+    entries = sorted((name, pick.team_picked, pick.auto_assigned) for pick, name in rows)
+    width = max((len(n) for n, _, _ in entries), default=10)
+
+    lines = [
+        f"📋 Round {round_obj.round_number} picks ({len(entries)})",
+        "",
+        "```",
+    ]
+    for name, team, auto in entries:
+        marker = " *" if auto else ""
+        lines.append(f"{name.ljust(width)}  {team}{marker}")
+    lines.append("```")
+    if any(auto for _, _, auto in entries):
+        lines.append("* auto-picked at the deadline")
+    return "\n".join(lines)
+
+
+def _send_to_admin(text: str, ref: str, dry_run: bool) -> str:
+    import requests
+
+    if not ADMIN_WHATSAPP:
+        return "skipped — ADMIN_WHATSAPP not set"
+    if not SENDER_TOKEN:
+        return "skipped — SENDER_TOKEN not set"
+    if dry_run:
+        return f"would send {len(text)} chars to the organiser"
+    try:
+        response = requests.post(
+            f"{SENDER_URL}/send",
+            json={"to": ADMIN_WHATSAPP, "text": text, "ref": ref},
+            headers={"x-sender-token": SENDER_TOKEN},
+            timeout=10,
+        )
+        if response.status_code in (202, 409):
+            return "queued to the organiser"
+        return f"FAILED [{response.status_code}] {response.text[:100]}"
+    except Exception as exc:
+        return f"sender unreachable: {exc}"
+
+
+def publish_digests(dry_run: bool = False) -> list[str]:
+    """Send the organiser anything worth forwarding to the group.
+
+    Runs independently of the round phase: the results digest belongs to a
+    round that has just finished, by which point there may already be a new
+    active round.
+    """
+    notes = []
+    state = _published()
+
+    # Picks table — once the deadline has passed and auto-picks have filled
+    # any gaps, so the table is always complete rather than waiting on
+    # stragglers who may never pick.
+    now = datetime.utcnow()
+    for round_obj in Round.query.filter(Round.status == "active").all():
+        if round_obj.id in state.get("table", []):
+            continue
+        deadline = round_obj.pick_deadline
+        if not deadline or now < deadline:
+            continue
+        active = Player.query.filter_by(status="active").count()
+        submitted = Pick.query.filter_by(round_id=round_obj.id).count()
+        if submitted < active:
+            continue  # auto-picks have not caught up yet
+        result = _send_to_admin(picks_table(round_obj), f"table-{round_obj.id}", dry_run)
+        notes.append(f"picks table R{round_obj.round_number}: {result}")
+        if not dry_run and result.startswith("queued"):
+            _mark_published("table", round_obj.id)
+
+    # Results digest — only for rounds that have finished recently. Without a
+    # recency bound this happily offered to send digests for rounds that ended
+    # in May, on the first run.
+    cutoff = now - timedelta(days=14)
+    recent = (
+        Round.query.filter(Round.status == "completed")
+        .order_by(Round.id.desc())
+        .limit(5)
+        .all()
+    )
+    for round_obj in recent:
+        if round_obj.id in state.get("results", []):
+            continue
+        if not round_obj.first_kickoff_at or round_obj.first_kickoff_at < cutoff:
+            continue
+        if not Pick.query.filter_by(round_id=round_obj.id).first():
+            continue
+        result = _send_to_admin(results_digest(round_obj), f"results-{round_obj.id}", dry_run)
+        notes.append(f"results R{round_obj.round_number}: {result}")
+        if not dry_run and result.startswith("queued"):
+            _mark_published("results", round_obj.id)
+
+    return notes
+
+
 def _eligible_team_counts(cycle_number: int) -> dict[str, int]:
     """How many teams each active player still has available this cycle.
 
@@ -621,6 +793,12 @@ def tick(dry_run: bool = False) -> Plan:
             outcome = reconcile_deliveries()
             if outcome not in ("nothing to reconcile",):
                 logger.info("reconcile -> %s", outcome)
+
+        # Digests are independent of the round phase: a results digest belongs
+        # to a round that has just finished, by which point a new one may
+        # already be active.
+        for note in publish_digests(dry_run=dry_run):
+            logger.info("publish -> %s", note)
 
         plan = build_plan()
         logger.info("phase=%s round=%s", plan.phase, plan.round_label)

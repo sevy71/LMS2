@@ -142,3 +142,4 @@ Thumbs.db
 /tmp/chrome_profile/
 # Local scheduler venv
 .venv/
+.published.json
