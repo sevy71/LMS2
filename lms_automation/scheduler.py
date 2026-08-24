@@ -99,6 +99,12 @@ def build_plan(now: datetime | None = None) -> Plan:
         plan.phase = "no-active-round"
         plan.actions.append("rollover-check")
         plan.actions.append("season-check")
+        # A round that ends with survivors leaves the game with nothing to do:
+        # app.py marks it completed, checks for a winner, checks whether
+        # everyone is out, and stops. The next round is only ever created
+        # automatically on a rollover, so a normal completion stalled here
+        # until someone made one by hand.
+        plan.actions.append("create-next-round")
         plan.notes.append("No active round — checking whether one should be created.")
         return plan
 
@@ -444,12 +450,102 @@ def reconcile_deliveries() -> str:
     return f"marked {marked} delivered" + (f", {failed} failed and left pending" if failed else "")
 
 
+def _eligible_team_counts(cycle_number: int) -> dict[str, int]:
+    """How many teams each active player still has available this cycle.
+
+    The rules only allow a round to go ahead if every active player has at
+    least one eligible team, so this is checked before creating one rather
+    than discovering it when someone cannot pick.
+    """
+    counts = {}
+    for player in Player.query.filter_by(status="active").all():
+        used = (
+            db.session.query(Pick.team_picked)
+            .join(Round, Round.id == Pick.round_id)
+            .filter(Pick.player_id == player.id, Round.cycle_number == cycle_number)
+            .distinct()
+            .count()
+        )
+        counts[player.name] = 20 - used
+    return counts
+
+
+def create_next_round(dry_run: bool = False) -> str:
+    """Create the next round once one has finished with survivors still in.
+
+    Deliberately delegates to POST /api/rounds, the same endpoint the admin
+    dashboard uses, so cycle detection, round numbering, fixture loading and
+    deadline derivation all stay in one place rather than being reimplemented.
+
+    Refuses in every case it is not certain about: an existing unfinished
+    round, a rollover (which creates its own round), no completed round to
+    follow, no fixtures available, or a matchday already used.
+    """
+    from app import fetch_upcoming_fixtures  # local import: heavy at module load
+
+    existing = Round.query.filter(Round.status.in_(("active", "pending"))).first()
+    if existing:
+        return f"skipped — Round {existing.round_number} is still {existing.status}"
+
+    last = (
+        Round.query.filter_by(status="completed")
+        .order_by(Round.id.desc())
+        .first()
+    )
+    if last is None:
+        return "skipped — no completed round to follow"
+
+    # A rollover creates its own round for the new cycle; stay out of its way.
+    if last.special_measure == "EARLY_TERMINATED":
+        return "skipped — last round was early-terminated; rollover owns this"
+
+    active_players = Player.query.filter_by(status="active").count()
+    if active_players == 0:
+        return "skipped — no active players; rollover should handle this"
+    if active_players == 1:
+        return "skipped — one player left; that is a winner, not a new round"
+
+    check = fetch_upcoming_fixtures(horizon_days=45)
+    if not check.get("available"):
+        return f"skipped — no upcoming fixtures ({check.get('error') or 'season break'})"
+
+    used_matchdays = {
+        r.pl_matchday for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()
+    }
+    matchday = check.get("next_matchday")
+    if matchday in used_matchdays:
+        return f"skipped — matchday {matchday} already used; needs an admin"
+    if not matchday:
+        return "skipped — could not determine the next matchday"
+
+    # Rules: a round only goes ahead if every active player has an eligible team.
+    short = {n: c for n, c in _eligible_team_counts(last.cycle_number or 1).items() if c < 1}
+    if short:
+        return f"BLOCKED — {len(short)} players have no eligible team left: {list(short)[:3]}"
+
+    if dry_run:
+        return (
+            f"would create the next round on matchday {matchday} "
+            f"for {active_players} active players"
+        )
+
+    client = _admin_client()
+    response = client.post("/api/rounds", json={"pl_matchday": matchday})
+    body = response.get_json(silent=True) or {}
+    if response.status_code == 200 and body.get("success"):
+        return f"created round on matchday {matchday} ({active_players} players)"
+    return f"FAILED [{response.status_code}] {body.get('error') or response.data[:120]}"
+
+
 def run_action(action: str, plan: Plan, dry_run: bool = False) -> str:
     """Execute one planned action via the existing admin endpoints."""
     route = ACTION_ROUTES.get(action)
 
     if action == "send-reminders":
         return send_due_reminders(dry_run=dry_run)
+
+    if action == "create-next-round":
+        return create_next_round(dry_run=dry_run)
 
     if action == "process-results":
         # process-results does not read scores from the database — it requires
