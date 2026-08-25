@@ -520,6 +520,37 @@ def results_digest(round_obj: Round) -> str:
     return "\n".join(lines)
 
 
+GRID_IMAGE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "exports", "picks_grid.png"
+)
+
+
+def refresh_grid_image() -> str | None:
+    """Redraw the cumulative picks grid. Returns the path, or None on failure.
+
+    The grid is the format the group already reads in other sweepstakes:
+    players down the side, rounds across, eliminated in red. It is an image
+    because a grid of this width is unreadable as WhatsApp text once there is
+    more than one round.
+    """
+    from grid_image import render_picks_grid
+
+    try:
+        client = _admin_client()
+        data = client.get("/api/picks-grid-data?cycle=current").get_json() or {}
+        # Entry-fee payment dates are admin bookkeeping and must not travel to
+        # the group with the grid.
+        for player in data.get("players", []):
+            player.pop("cycle_paid_at", None)
+        cycle = data.get("current_cycle", "")
+        return render_picks_grid(
+            data, GRID_IMAGE_PATH, f"Last Man Standing — Cycle {cycle}"
+        )
+    except Exception as exc:
+        logger.warning("could not render the picks grid: %s", exc)
+        return None
+
+
 def picks_table(round_obj: Round) -> str:
     """Every player's pick for the round, as a monospaced table."""
     rows = (
@@ -592,8 +623,17 @@ def publish_digests(dry_run: bool = False) -> list[str]:
         submitted = Pick.query.filter_by(round_id=round_obj.id).count()
         if submitted < active:
             continue  # auto-picks have not caught up yet
-        result = _send_to_admin(picks_table(round_obj), f"table-{round_obj.id}", dry_run)
-        notes.append(f"picks table R{round_obj.round_number}: {result}")
+        path = None if dry_run else refresh_grid_image()
+        text = (
+            f"📋 All picks are in for Round {round_obj.round_number}.\n\n"
+            f"The grid has been updated — drag it into the group from:\n"
+            f"exports/picks_grid.png"
+        )
+        result = _send_to_admin(text, f"table-{round_obj.id}", dry_run)
+        notes.append(
+            f"picks grid R{round_obj.round_number}: {result}"
+            + (f" (image: {os.path.basename(path)})" if path else "")
+        )
         if not dry_run and result.startswith("queued"):
             _mark_published("table", round_obj.id)
 
@@ -614,8 +654,15 @@ def publish_digests(dry_run: bool = False) -> list[str]:
             continue
         if not Pick.query.filter_by(round_id=round_obj.id).first():
             continue
-        result = _send_to_admin(results_digest(round_obj), f"results-{round_obj.id}", dry_run)
-        notes.append(f"results R{round_obj.round_number}: {result}")
+        path = None if dry_run else refresh_grid_image()
+        text = results_digest(round_obj)
+        if path:
+            text += "\n\n📊 Grid updated — drag it into the group from:\nexports/picks_grid.png"
+        result = _send_to_admin(text, f"results-{round_obj.id}", dry_run)
+        notes.append(
+            f"results R{round_obj.round_number}: {result}"
+            + (" (grid refreshed)" if path else "")
+        )
         if not dry_run and result.startswith("queued"):
             _mark_published("results", round_obj.id)
 

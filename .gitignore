@@ -143,3 +143,4 @@ Thumbs.db
 # Local scheduler venv
 .venv/
 .published.json
+exports/
