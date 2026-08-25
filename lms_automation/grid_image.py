@@ -68,7 +68,28 @@ def _short(team: str | None) -> str:
 def render_picks_grid(data: dict, out_path: str, title: str) -> str:
     """Draw the grid and return the path written."""
     rounds = data.get("rounds", [])
-    players = sorted(data.get("players", []), key=lambda p: (p.get("name") or "").lower())
+
+    def sort_key(player):
+        """Still-in players first, then grouped by their most recent pick.
+
+        The same sort you would apply by hand in a spreadsheet: eliminated
+        players sink to the bottom, and everyone on the same team this round
+        sits together, so the shape of the round is readable at a glance.
+        """
+        picks = player.get("picks") or {}
+        latest_team = ""
+        for rnd in reversed(rounds):
+            pick = picks.get(rnd.get("round_key"))
+            if pick and pick.get("team"):
+                latest_team = pick["team"]
+                break
+        return (
+            player.get("status") == "eliminated",
+            latest_team.lower(),
+            (player.get("name") or "").lower(),
+        )
+
+    players = sorted(data.get("players", []), key=sort_key)
 
     width = NAME_W + COL_W * max(1, len(rounds)) + PAD * 2
     height = PAD * 2 + ROW_H * (len(players) + 2) + 26
