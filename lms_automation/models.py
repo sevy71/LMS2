@@ -274,9 +274,16 @@ class ReminderSchedule(db.Model):
         ]
 
         # A round created close to its deadline would fire the opening message
-        # and the nudge together, which reads as a glitch. Drop the nudge if it
-        # would land on top of the announcement.
-        if (deadline - NUDGE_LEAD) - now < timedelta(hours=12):
+        # and the nudge together, which reads as a glitch. Only drop the nudge
+        # if it would land essentially on top of the announcement.
+        #
+        # This was 12 hours, which was far too wide: Round 2 opened at 07:20
+        # with its nudge due at 18:00 the same day — ten hours later, a
+        # different part of the day entirely — and the nudge was discarded,
+        # leaving a three-day silence between the announcement and the
+        # deadline reminders. The notices exist to catch people across
+        # different shifts, so only a genuine collision should suppress one.
+        if (deadline - NUDGE_LEAD) - now < timedelta(hours=2):
             schedule = [entry for entry in schedule if entry[0] != 'nudge']
 
         reminders_created = 0
