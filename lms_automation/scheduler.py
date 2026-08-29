@@ -551,6 +551,31 @@ def refresh_grid_image() -> str | None:
         return None
 
 
+def lock_round_picks(round_obj: Round) -> int:
+    """Close the picking window for a round by expiring its pick tokens.
+
+    Publishing the grid while links still work would let a player see what
+    everyone else chose and then change their own — the links stay editable
+    until they expire. Locking first is what makes early publication fair.
+
+    Expiring the token is the same mechanism the deadline already uses, so a
+    player following an old link gets the ordinary "invalid pick link" page
+    rather than anything new. Note this closes the window for the last player
+    to pick as well: they get no chance to amend, having had the same days as
+    everyone else.
+    """
+    now = datetime.utcnow()
+    tokens = PickToken.query.filter_by(round_id=round_obj.id).all()
+    locked = 0
+    for token in tokens:
+        if token.expires_at is None or token.expires_at > now:
+            token.expires_at = now
+            locked += 1
+    if locked:
+        db.session.commit()
+    return locked
+
+
 def picks_table(round_obj: Round) -> str:
     """Every player's pick for the round, as a monospaced table."""
     rows = (
@@ -576,7 +601,7 @@ def picks_table(round_obj: Round) -> str:
     return "\n".join(lines)
 
 
-def _send_to_admin(text: str, ref: str, dry_run: bool) -> str:
+def _send_to_admin(text: str, ref: str, dry_run: bool, image: str | None = None) -> str:
     import requests
 
     if not ADMIN_WHATSAPP:
@@ -588,7 +613,15 @@ def _send_to_admin(text: str, ref: str, dry_run: bool) -> str:
     try:
         response = requests.post(
             f"{SENDER_URL}/send",
-            json={"to": ADMIN_WHATSAPP, "text": text, "ref": ref},
+            json={
+                "to": ADMIN_WHATSAPP,
+                "text": text,
+                "ref": ref,
+                # The grid travels as a picture, not a file path: a path is no
+                # use to someone away from the Mac, which is exactly when the
+                # digest matters.
+                **({"image": os.path.abspath(image)} if image else {}),
+            },
             headers={"x-sender-token": SENDER_TOKEN},
             timeout=10,
         )
@@ -609,27 +642,33 @@ def publish_digests(dry_run: bool = False) -> list[str]:
     notes = []
     state = _published()
 
-    # Picks table — once the deadline has passed and auto-picks have filled
-    # any gaps, so the table is always complete rather than waiting on
-    # stragglers who may never pick.
+    # Picks table — as soon as every active player is in, whenever that
+    # happens, rather than waiting for the deadline. Waiting meant the grid
+    # landed at 19:00 on a Friday, which is the worst moment for the organiser
+    # to be free to post it.
+    #
+    # The links are closed first. Publishing while they still worked would let
+    # a player see everyone else's pick and then change their own, which is
+    # what previously argued for waiting until the deadline. Locking removes
+    # that objection.
+    #
+    # If some players never pick, submitted only reaches active once auto-picks
+    # run at the deadline, so this still fires then.
     now = datetime.utcnow()
     for round_obj in Round.query.filter(Round.status == "active").all():
         if round_obj.id in state.get("table", []):
             continue
-        deadline = round_obj.pick_deadline
-        if not deadline or now < deadline:
-            continue
         active = Player.query.filter_by(status="active").count()
         submitted = Pick.query.filter_by(round_id=round_obj.id).count()
         if submitted < active:
-            continue  # auto-picks have not caught up yet
+            continue  # still waiting on picks, or on auto-picks at the deadline
+        if not dry_run:
+            locked = lock_round_picks(round_obj)
+            if locked:
+                logger.info("locked %s pick links for R%s", locked, round_obj.round_number)
         path = None if dry_run else refresh_grid_image()
-        text = (
-            f"📋 All picks are in for Round {round_obj.round_number}.\n\n"
-            f"The grid has been updated — drag it into the group from:\n"
-            f"exports/picks_grid.png"
-        )
-        result = _send_to_admin(text, f"table-{round_obj.id}", dry_run)
+        text = f"📋 Round {round_obj.round_number} picks are locked. Ready to post to the group."
+        result = _send_to_admin(text, f"table-{round_obj.id}", dry_run, image=path)
         notes.append(
             f"picks grid R{round_obj.round_number}: {result}"
             + (f" (image: {os.path.basename(path)})" if path else "")
@@ -656,9 +695,7 @@ def publish_digests(dry_run: bool = False) -> list[str]:
             continue
         path = None if dry_run else refresh_grid_image()
         text = results_digest(round_obj)
-        if path:
-            text += "\n\n📊 Grid updated — drag it into the group from:\nexports/picks_grid.png"
-        result = _send_to_admin(text, f"results-{round_obj.id}", dry_run)
+        result = _send_to_admin(text, f"results-{round_obj.id}", dry_run, image=path)
         notes.append(
             f"results R{round_obj.round_number}: {result}"
             + (" (grid refreshed)" if path else "")
