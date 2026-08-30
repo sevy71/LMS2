@@ -177,6 +177,13 @@ def build_plan(now: datetime | None = None) -> Plan:
         plan.phase = "in-play"
         plan.notes.append(f"last kickoff {last_kickoff:%a %d %b %H:%M} UTC")
         plan.actions.append("fetch-results")
+        # Resolve picks as their fixtures finish rather than waiting for the
+        # whole round. Most players know their fate by Saturday evening, and
+        # holding it back until Monday night meant the grid showed nothing for
+        # two days. process-results only touches fixtures that already have
+        # scores, and only marks the round completed once all of them are in,
+        # so running it here settles what is settled and leaves the rest.
+        plan.actions.append("process-results")
         return plan
 
     if last_kickoff and now > last_kickoff + RESULT_POLL_HORIZON:
