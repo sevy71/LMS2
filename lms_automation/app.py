@@ -94,6 +94,17 @@ print(f"[DB CONFIG] Source: {_db_source}")
 print(f"[DB CONFIG] URI: {_redact_db_uri(app.config['SQLALCHEMY_DATABASE_URI'])}")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# The scheduler runs on a Mac mini that sleeps. On wake, pooled connections
+# have long since been closed at the far end, and the first query of the day
+# would fail on a dead socket — losing that tick, which around a deadline is a
+# lost auto-pick window. pre_ping checks a connection before handing it out and
+# transparently replaces a dead one; recycle retires connections before Railway
+# times them out.
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+}
+
 # Import models and db
 import sys
 import os
@@ -931,6 +942,9 @@ def _ensure_minimum_schema():
 with app.app_context():
     _startup_db_ping()       # Verify connection first - raises RuntimeError on failure
     _ensure_minimum_schema() # Then ensure schema - connection errors will also raise
+
+# Public origin used when building links for players. Overridden by BASE_URL.
+PUBLIC_BASE_URL_FALLBACK = 'https://web-production-c715.up.railway.app'
 
 # Admin authentication.
 # Deliberately no default: this repo is public, so any fallback here is a
@@ -3940,6 +3954,12 @@ def process_round_results(round_id):
         app.logger.info(f"  Players: {active_players_count} active, {eliminated_players_global} eliminated globally")
         app.logger.info(f"  first_kickoff_at: {round_obj.first_kickoff_at}")
 
+        # A round is decided once every pick has an outcome, whether or not
+        # fixtures remain that nobody chose.
+        picks_all_resolved = bool(round_picks) and all(
+            p.is_winner is not None for p in round_picks
+        )
+
         rollover_info = None
         early_termination = False
 
@@ -3987,9 +4007,25 @@ def process_round_results(round_id):
                 app.logger.warning(f"    Rollover: FAILED - handle_rollover_scenario returned None")
             app.logger.info(f">>> EARLY TERMINATION END")
 
-        # NORMAL COMPLETION: All fixtures finished
-        elif completed_fixtures == total_fixtures:
-            app.logger.info(f">>> NORMAL COMPLETION: All {total_fixtures} fixtures completed")
+        # NORMAL COMPLETION: every pick in this round has a result.
+        #
+        # Waiting for all ten fixtures held rounds open on games nobody had
+        # picked. In round 3 all nineteen picks were settled on the Saturday
+        # while Everton v Man Utd and Arsenal v Chelsea remained on the Sunday
+        # with no player on any of those four teams — the round was decided but
+        # stayed open for another day, delaying the results, the grid and the
+        # next round's pick links.
+        #
+        # A round is over once every player's team has played. Remaining
+        # fixtures cannot change anyone's fate.
+        elif picks_all_resolved or completed_fixtures == total_fixtures:
+            if picks_all_resolved and completed_fixtures < total_fixtures:
+                app.logger.info(
+                    f">>> NORMAL COMPLETION: all {len(round_picks)} picks resolved with "
+                    f"{total_fixtures - completed_fixtures} fixture(s) left that nobody picked"
+                )
+            else:
+                app.logger.info(f">>> NORMAL COMPLETION: All {total_fixtures} fixtures completed")
             round_obj.status = 'completed'
             db.session.flush()
 
@@ -5389,9 +5425,10 @@ class WhatsAppReminder:
         if not player.whatsapp_number:
             return None
 
-        # Determine anchor (kickoff) and cutoff (1 hour before kickoff) times
-        anchor_time = getattr(round_obj, 'first_kickoff_at', None) or getattr(round_obj, 'end_date', None)
-        cutoff_time = anchor_time - timedelta(hours=1) if anchor_time else None
+        # Use the round's own deadline rather than recomputing it, so a message
+        # can never quote a different time to the one actually enforced — an
+        # admin-set end_date would otherwise be ignored here.
+        cutoff_time = round_obj.pick_deadline
 
         def _format_time_remaining(target):
             """Return a friendly countdown like '90 minutes' or '2 hours 15 minutes'."""
@@ -5415,12 +5452,25 @@ class WhatsAppReminder:
 
         time_remaining = _format_time_remaining(cutoff_time)
 
-        # Get base URL - use request context if available, otherwise fall back to env var
-        try:
-            base_url = os.environ.get('BASE_URL') or request.url_root.rstrip('/')
-        except RuntimeError:
-            # Outside request context
-            base_url = os.environ.get('BASE_URL', 'https://web-production-c715.up.railway.app')
+        # BASE_URL wins. Falling back to the request host looked reasonable
+        # until the scheduler started driving these endpoints through Flask's
+        # test client, whose url_root is "http://localhost/" — every pick link
+        # it sent pointed at the player's own phone and simply failed. A host
+        # that only resolves on this machine must never reach a player, so
+        # loopback is rejected outright rather than used.
+        base_url = os.environ.get('BASE_URL')
+        if not base_url:
+            try:
+                candidate = request.url_root.rstrip('/')
+            except RuntimeError:
+                candidate = ''
+            if candidate and not any(h in candidate for h in ('localhost', '127.0.0.1', '0.0.0.0')):
+                base_url = candidate
+        if not base_url:
+            base_url = PUBLIC_BASE_URL_FALLBACK
+            app.logger.warning(
+                "BASE_URL not set and no usable request host — falling back to %s", base_url
+            )
         # Ensure HTTPS for production
         if base_url.startswith('http://') and 'localhost' not in base_url and '127.0.0.1' not in base_url:
             base_url = base_url.replace('http://', 'https://')
@@ -5430,8 +5480,21 @@ class WhatsAppReminder:
         pick_url = pick_token.get_pick_url(base_url)
         dashboard_url = f"{base_url}/dashboard/{pick_token.token}"
 
+        # Deadline in the players' own timezone, for the opening message where
+        # a countdown ("3 days left") is less useful than an actual date.
+        deadline_str = None
+        try:
+            if cutoff_time:
+                deadline_str = to_local(cutoff_time).strftime('%A %d %B, %H:%M')
+        except Exception:
+            deadline_str = None
+
         # Customize message based on reminder type
-        if reminder_type == '4_hour':
+        if reminder_type == 'round_open':
+            urgency = f"⚽ Round {round_obj.round_number} is open"
+        elif reminder_type == 'nudge':
+            urgency = "👋 Still need your pick"
+        elif reminder_type == '4_hour':
             urgency = "⏰ 4 Hour Reminder"
         elif reminder_type == '2_hour':
             urgency = "🚨 2 Hour Reminder"
@@ -5442,8 +5505,43 @@ class WhatsAppReminder:
             time_msg = f"You have about {time_remaining} left to submit your pick for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday})."
         else:
             time_msg = f"Time is running out to submit your pick for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday})!"
-        
-        message = f"""{urgency}
+
+        if reminder_type == 'round_open':
+            when = f"Picks close {deadline_str}." if deadline_str else "Picks close one hour before the first kickoff."
+            message = f"""{urgency}
+
+Hi {player.name}! 👋
+
+Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday}) is now open.
+
+{when}
+Miss it and a team gets picked for you.
+
+🎯 Make your pick: {pick_url}
+
+📊 Check your dashboard: {dashboard_url}
+
+Good luck! 🍀
+Last Man Standing"""
+        elif reminder_type == 'nudge':
+            when = f"Picks close {deadline_str}." if deadline_str else "Picks close soon."
+            message = f"""{urgency}
+
+Hi {player.name}! 👋
+
+You haven't picked yet for Round {round_obj.round_number} (PL Matchday {round_obj.pl_matchday}).
+
+{when}
+Plenty of time — but easy to forget.
+
+🎯 Make your pick: {pick_url}
+
+📊 Check your dashboard: {dashboard_url}
+
+Good luck! 🍀
+Last Man Standing"""
+        else:
+            message = f"""{urgency}
 
 Hi {player.name}! 👋
 
@@ -5473,6 +5571,12 @@ Last Man Standing"""
             'message': message,
             'whatsapp_link': whatsapp_link,
             'reminder_type': reminder_type,
+            # Exposed separately so callers can compose a combined message for
+            # a household sharing one phone, rather than parsing them back out
+            # of the rendered text.
+            'pick_url': pick_url,
+            'dashboard_url': dashboard_url,
+            'deadline_local': deadline_str,
             'round_number': round_obj.round_number
         }
     
