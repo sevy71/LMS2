@@ -3954,6 +3954,12 @@ def process_round_results(round_id):
         app.logger.info(f"  Players: {active_players_count} active, {eliminated_players_global} eliminated globally")
         app.logger.info(f"  first_kickoff_at: {round_obj.first_kickoff_at}")
 
+        # A round is decided once every pick has an outcome, whether or not
+        # fixtures remain that nobody chose.
+        picks_all_resolved = bool(round_picks) and all(
+            p.is_winner is not None for p in round_picks
+        )
+
         rollover_info = None
         early_termination = False
 
@@ -4001,9 +4007,25 @@ def process_round_results(round_id):
                 app.logger.warning(f"    Rollover: FAILED - handle_rollover_scenario returned None")
             app.logger.info(f">>> EARLY TERMINATION END")
 
-        # NORMAL COMPLETION: All fixtures finished
-        elif completed_fixtures == total_fixtures:
-            app.logger.info(f">>> NORMAL COMPLETION: All {total_fixtures} fixtures completed")
+        # NORMAL COMPLETION: every pick in this round has a result.
+        #
+        # Waiting for all ten fixtures held rounds open on games nobody had
+        # picked. In round 3 all nineteen picks were settled on the Saturday
+        # while Everton v Man Utd and Arsenal v Chelsea remained on the Sunday
+        # with no player on any of those four teams — the round was decided but
+        # stayed open for another day, delaying the results, the grid and the
+        # next round's pick links.
+        #
+        # A round is over once every player's team has played. Remaining
+        # fixtures cannot change anyone's fate.
+        elif picks_all_resolved or completed_fixtures == total_fixtures:
+            if picks_all_resolved and completed_fixtures < total_fixtures:
+                app.logger.info(
+                    f">>> NORMAL COMPLETION: all {len(round_picks)} picks resolved with "
+                    f"{total_fixtures - completed_fixtures} fixture(s) left that nobody picked"
+                )
+            else:
+                app.logger.info(f">>> NORMAL COMPLETION: All {total_fixtures} fixtures completed")
             round_obj.status = 'completed'
             db.session.flush()
 
