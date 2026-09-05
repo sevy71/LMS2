@@ -522,7 +522,9 @@ def results_digest(round_obj: Round) -> str:
         lines.append("❌ Nobody went out this round.")
         lines.append("")
 
-    lines.append(f"✅ Through: {len(through)}")
+    # Only one survivor count. "Through this round" and "still in the game" are
+    # always the same number — everyone who survives a round is by definition
+    # still in — so printing both said the same thing twice.
     lines.append(f"👥 Still in the game: {still_in}")
     return "\n".join(lines)
 
