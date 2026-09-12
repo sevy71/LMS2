@@ -4979,12 +4979,29 @@ def make_pick(token):
     if not pick_token:
         return render_template('pick_error.html', error="Invalid pick link", player_nav_only=True), 404
     
-    if not pick_token.is_valid():
-        error = "This pick link has expired" if pick_token.expires_at and datetime.utcnow() > pick_token.expires_at else "This pick link has already been used"
-        return render_template('pick_error.html', error=error, player_nav_only=True), 400
-    
     player = pick_token.player
     round_obj = pick_token.round
+
+    if not pick_token.is_valid():
+        # A player whose pick is already recorded should see it, not an error.
+        # Links are expired the moment the last player picks, so anyone coming
+        # back to double-check finds their link dead — and a bare "expired"
+        # message reads as "your pick failed". That is exactly what a player
+        # reported in round 4: his pick had been safely recorded 96 minutes
+        # before the lock.
+        recorded = Pick.query.filter_by(player_id=player.id, round_id=round_obj.id).first()
+        if recorded:
+            return render_template('pick_success.html',
+                                 player=player,
+                                 round=round_obj,
+                                 team_picked=recorded.team_picked,
+                                 already_picked=True,
+                                 can_edit=False,
+                                 edits_remaining=0,
+                                 token=token,
+                                 player_nav_only=True)
+        error = "This pick link has expired" if pick_token.expires_at and datetime.utcnow() > pick_token.expires_at else "This pick link has already been used"
+        return render_template('pick_error.html', error=error, player_nav_only=True), 400
     
     # Check if player already has a pick for this round
     existing_pick = Pick.query.filter_by(player_id=player.id, round_id=round_obj.id).first()
