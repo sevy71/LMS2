@@ -4998,6 +4998,7 @@ def make_pick(token):
                                  already_picked=True,
                                  can_edit=False,
                                  edits_remaining=0,
+                                 locked=True,   # viewing, not updating
                                  token=token,
                                  player_nav_only=True)
         error = "This pick link has expired" if pick_token.expires_at and datetime.utcnow() > pick_token.expires_at else "This pick link has already been used"
@@ -5017,6 +5018,7 @@ def make_pick(token):
                              already_picked=True,
                              can_edit=False,
                              edits_remaining=0,
+                             locked=True,   # viewing, not updating
                              token=token,
                              player_nav_only=True)
     
