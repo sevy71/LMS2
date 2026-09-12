@@ -9,7 +9,7 @@
             <div class="card-header bg-success text-white text-center">
                 <h4 class="mb-0">
                     <i class="fas fa-check-circle me-2"></i>
-                    {% if already_picked %}Pick Updated Successfully!{% else %}Pick Submitted Successfully!{% endif %}
+                    {% if locked %}Your Pick Is Locked In{% elif already_picked %}Pick Updated Successfully!{% else %}Pick Submitted Successfully!{% endif %}
                 </h4>
             </div>
             <div class="card-body text-center py-4 py-md-5">
@@ -23,7 +23,13 @@
                     <h3 class="h4 mb-0"><strong>{{ team_picked }}</strong></h3>
                 </div>
 
-                {% if already_picked %}
+                {% if locked %}
+                    <div class="alert alert-success border-0 mb-4">
+                        <i class="fas fa-lock me-2"></i>
+                        <strong>Your pick is in and can no longer be changed.</strong><br>
+                        <small>Picks for this round are closed. You will be notified of the results after all matches are completed.</small>
+                    </div>
+                {% elif already_picked %}
                     <div class="alert alert-success border-0 mb-4">
                         <i class="fas fa-edit me-2"></i>
                         <strong>Pick Updated!</strong><br>
