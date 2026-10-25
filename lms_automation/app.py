@@ -425,7 +425,16 @@ def fetch_upcoming_fixtures(horizon_days: int = 45) -> dict:
             }
 
         # Get matchdays already used in database to avoid duplicates
-        used_matchdays = {r.pl_matchday for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()}
+        # A round parked on WAITING_FOR_FIXTURES holds a provisional matchday it
+        # has not actually played. Counting that as "used" makes the round block
+        # its own matchday and skip to the next one: round 4 of cycle 7 was
+        # created for matchday 9, then handed matchday 10 when fixtures finally
+        # became available, leaving players a fortnight with no game.
+        used_matchdays = {
+            r.pl_matchday
+            for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()
+            if r.special_measure != 'WAITING_FOR_FIXTURES'
+        }
         app.logger.info(f"SEASON CHECK: Matchdays already used: {sorted(used_matchdays)}")
 
         # Filter out already-used matchdays
