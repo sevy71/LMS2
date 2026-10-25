@@ -86,8 +86,26 @@ else:
         "On Railway, ensure the Postgres plugin is attached."
     )
 
-# SQLAlchemy prefers 'postgresql' over 'postgres'
-app.config['SQLALCHEMY_DATABASE_URI'] = database_uri.replace('postgres://', 'postgresql://')
+# SQLAlchemy picks its DBAPI from the URL scheme, so a connection string that
+# names a driver we don't ship — 'postgresql+psycopg://' is psycopg 3, and we
+# pin psycopg2-binary — kills the worker at import with ModuleNotFoundError.
+# The scheme is whatever the host put in the environment variable, and it has
+# been re-pasted by hand during a credential rotation before now, so pin the
+# driver that is actually installed rather than trusting what we were handed.
+def _pin_pg_driver(uri: str) -> str:
+    if not uri.startswith(('postgres://', 'postgresql://', 'postgres+', 'postgresql+')):
+        return uri
+    for driver in ('psycopg2', 'psycopg'):
+        try:
+            __import__(driver)
+        except ImportError:
+            continue
+        return f"postgresql+{driver}://{uri.split('://', 1)[1]}"
+    # Neither driver present: let SQLAlchemy raise with its own clearer message.
+    return uri.replace('postgres://', 'postgresql://', 1)
+
+
+app.config['SQLALCHEMY_DATABASE_URI'] = _pin_pg_driver(database_uri)
 
 # Log database configuration with redacted password
 print(f"[DB CONFIG] Source: {_db_source}")
