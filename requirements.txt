@@ -1,6 +1,14 @@
 Flask==2.3.3
 Flask-SQLAlchemy==3.0.5
 Flask-Migrate==4.0.5
+# Pinned explicitly, not left to Flask-SQLAlchemy's '>=1.4.18'. SQLAlchemy 2.1
+# changed the default DBAPI for 'postgresql://' from psycopg2 to psycopg 3,
+# and because nothing pinned it, the first rebuild in two months picked that up
+# and every worker died at import on a driver we don't ship. These two govern
+# the database and the migrations that run on each boot, so they stay fixed to
+# the versions the game has actually been played on.
+SQLAlchemy==2.0.51
+alembic==1.19.1
 python-dotenv==1.0.0
 Werkzeug==2.3.7
 requests==2.31.0
