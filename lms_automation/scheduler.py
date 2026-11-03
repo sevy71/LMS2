@@ -495,6 +495,169 @@ def _mark_published(kind: str, round_id: int) -> None:
         logger.warning("could not record published digest: %s", exc)
 
 
+def _team(name: str | None) -> str:
+    """A club as the group writes it — "Man City", not "Manchester City FC".
+
+    The grid has always shortened club names to fit a phone-width cell. The
+    digest did not, so the same round read as "Chelsea FC" in the list and
+    "Chelsea" in the picture. One message, one spelling.
+    """
+    from grid_image import short_team  # lazy: grid_image pulls in PIL
+
+    return short_team(name) or (name or "")
+
+
+def _one_of(options: list[str], seed: int) -> str:
+    """Pick a line deterministically, so a redraw says the same thing twice."""
+    return options[seed % len(options)]
+
+
+def results_quip(out: list, through: list, still_in: int, seed: int) -> str:
+    """One cheeky line about the shape of the round, for the group.
+
+    The digest states the facts; this is the bit that gets read out loud. It
+    is written rather than generated — no model runs on the mini — so it
+    leans on the handful of shapes a round actually takes: a wipeout on one
+    team, a lone casualty, the closing stages, a quiet week.
+    """
+    played = len(out) + len(through)
+
+    if still_in == 1 and through:
+        winner = sorted(name for name, _ in through)[0]
+        return _one_of(
+            [
+                f"🏆 That's your lot. {winner} takes it, and the rest of you can go back to pretending you knew all along.",
+                f"🏆 Last man standing: {winner}. Someone check they're still breathing.",
+            ],
+            seed,
+        )
+
+    if not out:
+        return _one_of(
+            [
+                "😴 Not a scratch. Everyone's through and nobody's interesting.",
+                "😴 A whole round and not one casualty. Pull your fingers out.",
+            ],
+            seed,
+        )
+
+    if still_in == 0:
+        return _one_of(
+            [
+                "💀 Every single one of you. Gone. The pot rolls over and we go again.",
+                "💀 Total wipeout — nobody left standing. Rollover, and the pot gets fatter.",
+            ],
+            seed,
+        )
+
+    counts = {}
+    for _, team in out:
+        counts[team] = counts.get(team, 0) + 1
+    team, victims = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+    # One team doing most of the damage is the line that writes itself — and
+    # with this crowd, a mass elimination genuinely is a local event.
+    if victims >= 4 and victims >= played / 2:
+        return _one_of(
+            [
+                f"☠️ {team} just took out half the north west — {victims} of you gone in ninety minutes.",
+                f"☠️ {victims} of you trusted {team}. {victims} of you are now spectators.",
+            ],
+            seed,
+        )
+    if victims >= 3 and victims >= len(out) * 0.6:
+        return _one_of(
+            [
+                f"☠️ {team} did the damage: {victims} of you out on one result.",
+                f"☠️ {victims} binned by {team} alone. That'll sting on Monday.",
+            ],
+            seed,
+        )
+
+    if len(out) == 1:
+        name, lost_to = out[0]
+        return _one_of(
+            [
+                f"🪦 One casualty: {name}, undone by {lost_to}. Everyone else carries on.",
+                f"🪦 Just {name} this week, done by {lost_to}. Unlucky.",
+            ],
+            seed,
+        )
+
+    # still_in counts active players; a player with no pick in this round
+    # would not be in `through`, so only name them when both are there.
+    if still_in == 2 and len(through) == 2:
+        names = sorted(name for name, _ in through)
+        return f"🥊 Two left — {names[0]} and {names[1]}. Neither of them is sleeping this week."
+
+    if still_in <= 5:
+        return _one_of(
+            [
+                f"🔥 Down to {still_in}. It's getting serious now.",
+                f"🔥 {len(out)} more gone, {still_in} left. The pot's close enough to touch.",
+            ],
+            seed,
+        )
+
+    # A big cull with no single team to blame still deserves better than a
+    # scoreline — round one routinely takes a third of the field.
+    if len(out) >= 4 and len(out) >= played / 3:
+        return _one_of(
+            [
+                f"☠️ Carnage. {len(out)} of you gone in one afternoon, {still_in} left.",
+                f"☠️ {len(out)} out in a single round. {still_in} of you survived the cull.",
+            ],
+            seed,
+        )
+
+    return _one_of(
+        [
+            f"⚰️ {len(out)} out, {still_in} still standing.",
+            f"⚰️ {len(out)} gone this round. {still_in} of you left to fall out with.",
+        ],
+        seed,
+    )
+
+
+def picks_quip(entries: list, seed: int) -> str:
+    """One line about the shape of a locked round's picks."""
+    total = len(entries)
+    if total == 0:
+        return "🤷 Not a single pick. Astonishing."
+    if total == 1:
+        return "👀 One pick in. That's the whole game now."
+
+    counts = {}
+    for _, team in entries:
+        counts[team] = counts.get(team, 0) + 1
+    team, backers = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+    if backers == total:
+        return f"🐑 Every last one of you on {team}. Either a masterclass or a mass burial."
+
+    if backers >= total * 0.6:
+        return _one_of(
+            [
+                f"🐑 {backers} of {total} have piled onto {team}. If that goes wrong it'll be very quiet in here.",
+                f"🐑 {backers} of you on {team}. Fearless, this lot.",
+            ],
+            seed,
+        )
+
+    loners = sorted((name, t) for name, t in entries if counts[t] == 1)
+    if loners and total >= 4:
+        name, lone_team = loners[seed % len(loners)]
+        return _one_of(
+            [
+                f"🧐 {name} is on their own with {lone_team}. Brave, or daft — we'll know Saturday.",
+                f"🧐 Nobody fancied {lone_team} except {name}. One of you is wrong.",
+            ],
+            seed,
+        )
+
+    return f"⚖️ {total} picks across {len(counts)} teams. Nicely spread, for once."
+
+
 def results_digest(round_obj: Round) -> str:
     """Who went out and who survived, ready to forward to the group."""
     picks = (
@@ -505,7 +668,7 @@ def results_digest(round_obj: Round) -> str:
     )
     out, through = [], []
     for pick, name in picks:
-        (through if pick.is_winner else out).append((name, pick.team_picked))
+        (through if pick.is_winner else out).append((name, _team(pick.team_picked)))
 
     still_in = Player.query.filter_by(status="active").count()
 
@@ -526,38 +689,100 @@ def results_digest(round_obj: Round) -> str:
     # always the same number — everyone who survives a round is by definition
     # still in — so printing both said the same thing twice.
     lines.append(f"👥 Still in the game: {still_in}")
+    lines.append("")
+    lines.append(results_quip(out, through, still_in, round_obj.id))
     return "\n".join(lines)
 
 
-GRID_IMAGE_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "exports", "picks_grid.png"
+EXPORTS_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "exports"
 )
 
 
-def refresh_grid_image() -> str | None:
-    """Redraw the cumulative picks grid. Returns the path, or None on failure.
+def _grid_data(cycle: int) -> dict:
+    """The cycle's picks grid, with admin-only fields stripped."""
+    client = _admin_client()
+    data = client.get(f"/api/picks-grid-data?cycle={cycle}").get_json() or {}
+    # Entry-fee payment dates are admin bookkeeping and must not travel to
+    # the group with the grid.
+    for player in data.get("players", []):
+        player.pop("cycle_paid_at", None)
+    return data
 
-    The grid is the format the group already reads in other sweepstakes:
-    players down the side, rounds across, eliminated in red. It is an image
-    because a grid of this width is unreadable as WhatsApp text once there is
-    more than one round.
+
+def refresh_grid_image(cycle, keep, out_name, subtitle=None) -> str | None:
+    """Draw the picks grid for the players ``keep`` accepts.
+
+    Returns the path, or None if there is nothing to draw or the render
+    fails — a missing grid costs the organiser a picture, not a message.
+
+    The grid is an image because a grid of this width is unreadable as
+    WhatsApp text once there is more than one round. It is drawn for a subset
+    of the field: a full table of forty-eight is mostly dead names by the
+    halfway point, and each thing we publish is about a different part of it.
+
+    Each render gets its own filename. The sender reads the file when the
+    message reaches the front of its queue, not when it is handed over, so
+    two digests sharing one path would both go out carrying whichever grid
+    happened to be drawn last.
     """
     from grid_image import render_picks_grid
 
     try:
-        client = _admin_client()
-        data = client.get("/api/picks-grid-data?cycle=current").get_json() or {}
-        # Entry-fee payment dates are admin bookkeeping and must not travel to
-        # the group with the grid.
-        for player in data.get("players", []):
-            player.pop("cycle_paid_at", None)
-        cycle = data.get("current_cycle", "")
+        data = _grid_data(cycle)
+        data["players"] = [p for p in data.get("players", []) if keep(p)]
+        if not data["players"]:
+            return None
         return render_picks_grid(
-            data, GRID_IMAGE_PATH, f"Last Man Standing — Cycle {cycle}"
+            data,
+            os.path.join(EXPORTS_DIR, out_name),
+            f"Last Man Standing — Cycle {data.get('current_cycle', cycle)}",
+            subtitle,
         )
     except Exception as exc:
         logger.warning("could not render the picks grid: %s", exc)
         return None
+
+
+def _round_key(round_obj: Round) -> str:
+    """The key the grid data uses for a round's column."""
+    return f"C{round_obj.cycle_number or 1}-R{round_obj.round_number}"
+
+
+def survivors_grid(round_obj: Round, still_in: int) -> str | None:
+    """The table that goes out when picks lock: only players still in."""
+    return refresh_grid_image(
+        round_obj.cycle_number or 1,
+        keep=lambda p: p.get("status") != "eliminated",
+        out_name=f"grid-r{round_obj.round_number}-live.png",
+        subtitle=f"Still in: {still_in}",
+    )
+
+
+def casualties_grid(round_obj: Round, gone: int) -> str | None:
+    """The table that goes out with results: only this round's casualties."""
+    key = _round_key(round_obj)
+
+    def keep(player):
+        return bool(((player.get("picks") or {}).get(key) or {}).get("is_eliminated"))
+
+    return refresh_grid_image(
+        round_obj.cycle_number or 1,
+        keep=keep,
+        out_name=f"grid-r{round_obj.round_number}-out.png",
+        subtitle=f"Knocked out in Round {round_obj.round_number}: {gone}",
+    )
+
+
+def _round_picks(round_obj: Round) -> list:
+    """(name, team) for every pick in a round."""
+    rows = (
+        Pick.query.filter_by(round_id=round_obj.id)
+        .join(Player, Player.id == Pick.player_id)
+        .add_columns(Player.name)
+        .all()
+    )
+    return sorted((name, _team(pick.team_picked)) for pick, name in rows)
 
 
 def lock_round_picks(round_obj: Round) -> int:
@@ -675,8 +900,14 @@ def publish_digests(dry_run: bool = False) -> list[str]:
             locked = lock_round_picks(round_obj)
             if locked:
                 logger.info("locked %s pick links for R%s", locked, round_obj.round_number)
-        path = None if dry_run else refresh_grid_image()
-        text = f"📋 Round {round_obj.round_number} picks are locked. Ready to post to the group."
+        path = None if dry_run else survivors_grid(round_obj, active)
+        text = "\n".join(
+            [
+                f"📋 Round {round_obj.round_number} picks are locked — {active} still in.",
+                "",
+                picks_quip(_round_picks(round_obj), round_obj.id),
+            ]
+        )
         result = _send_to_admin(text, f"table-{round_obj.id}", dry_run, image=path)
         notes.append(
             f"picks grid R{round_obj.round_number}: {result}"
@@ -702,12 +933,15 @@ def publish_digests(dry_run: bool = False) -> list[str]:
             continue
         if not Pick.query.filter_by(round_id=round_obj.id).first():
             continue
-        path = None if dry_run else refresh_grid_image()
+        # Only the players who went out this round, so the table shrinks as
+        # the cycle wears on. Nobody out means nothing worth drawing.
+        gone = Pick.query.filter_by(round_id=round_obj.id, is_eliminated=True).count()
+        path = None if dry_run or not gone else casualties_grid(round_obj, gone)
         text = results_digest(round_obj)
         result = _send_to_admin(text, f"results-{round_obj.id}", dry_run, image=path)
         notes.append(
             f"results R{round_obj.round_number}: {result}"
-            + (" (grid refreshed)" if path else "")
+            + (f" (image: {os.path.basename(path)})" if path else "")
         )
         if not dry_run and result.startswith("queued"):
             _mark_published("results", round_obj.id)

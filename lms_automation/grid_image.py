@@ -5,6 +5,13 @@ players in red — is the shape the group already understands from other
 sweepstakes. It does not survive as WhatsApp text: even two rounds wrap into
 an unreadable mess on a phone, and a season reaches twenty.
 
+The grid is drawn for a subset of the field rather than the whole cycle. A
+full table is mostly dead names by the halfway point, and the two moments we
+publish at each care about a different half of it: when picks lock, only the
+players still in have anything to show; when results land, only the players
+who just went out are news. Both tables shrink as a cycle wears on, which is
+the point — the reader should see the round, not scroll past it.
+
 The image is produced for the organiser to post. Posting to the group
 automatically was tried and rejected: driving WhatsApp's search to open a
 group chat raced with the keystrokes and sent a fragment of the search text
@@ -26,6 +33,7 @@ COL_ELIMINATED_TEXT = (255, 255, 255)
 COL_ROW_A = (255, 255, 255)
 COL_ROW_B = (243, 243, 243)
 COL_TEXT = (17, 17, 17)
+COL_SUBTITLE = (102, 102, 102)
 COL_GRID = (176, 176, 176)
 COL_WINNER = (214, 240, 214)        # survived this round
 
@@ -33,9 +41,11 @@ ROW_H = 30
 NAME_W = 190
 COL_W = 108
 PAD = 10
+TITLE_H = 26
+SUBTITLE_H = 20
 
 
-def _short(team: str | None) -> str:
+def short_team(team: str | None) -> str:
     """Compact a club name so a cell stays readable on a phone."""
     if not team:
         return ""
@@ -65,9 +75,31 @@ def _short(team: str | None) -> str:
     return swaps.get(name, name)
 
 
-def render_picks_grid(data: dict, out_path: str, title: str) -> str:
-    """Draw the grid and return the path written."""
-    rounds = data.get("rounds", [])
+def render_picks_grid(
+    data: dict,
+    out_path: str,
+    title: str,
+    subtitle: str | None = None,
+) -> str:
+    """Draw the grid for the players in ``data`` and return the path written.
+
+    Callers filter ``data['players']`` to the people the table is about. Round
+    columns nobody in that set ever picked in are dropped, so a table of
+    players who fell in round one is one column wide rather than trailing five
+    empty ones.
+    """
+    players_in = data.get("players", [])
+
+    def has_pick(rnd):
+        key = rnd.get("round_key")
+        return any(
+            ((p.get("picks") or {}).get(key) or {}).get("team") for p in players_in
+        )
+
+    rounds = [r for r in data.get("rounds", []) if has_pick(r)]
+    # A set with no picks at all would otherwise render as a nameless strip.
+    if not rounds:
+        rounds = data.get("rounds", [])[:1]
 
     def sort_key(player):
         """Still-in players first, then grouped by their most recent pick.
@@ -89,20 +121,24 @@ def render_picks_grid(data: dict, out_path: str, title: str) -> str:
             (player.get("name") or "").lower(),
         )
 
-    players = sorted(data.get("players", []), key=sort_key)
+    players = sorted(players_in, key=sort_key)
 
+    head_h = TITLE_H + (SUBTITLE_H if subtitle else 0)
     width = NAME_W + COL_W * max(1, len(rounds)) + PAD * 2
-    height = PAD * 2 + ROW_H * (len(players) + 2) + 26
+    height = PAD * 2 + ROW_H * (len(players) + 2) + head_h
 
     img = Image.new("RGB", (width, height), "white")
     d = ImageDraw.Draw(img)
     f_title = ImageFont.truetype(FONT_BOLD, 19)
+    f_sub = ImageFont.truetype(FONT_REGULAR, 13)
     f_head = ImageFont.truetype(FONT_BOLD, 14)
     f_name = ImageFont.truetype(FONT_BOLD, 13)
     f_cell = ImageFont.truetype(FONT_REGULAR, 12)
 
     d.text((PAD, PAD), title, font=f_title, fill=COL_TEXT)
-    top = PAD + 26
+    if subtitle:
+        d.text((PAD, PAD + TITLE_H - 4), subtitle, font=f_sub, fill=COL_SUBTITLE)
+    top = PAD + head_h
 
     # Header
     d.rectangle([PAD, top, width - PAD, top + ROW_H], fill=COL_HEADER_BG)
@@ -124,7 +160,7 @@ def render_picks_grid(data: dict, out_path: str, title: str) -> str:
         for i, rnd in enumerate(rounds):
             x = PAD + NAME_W + i * COL_W
             pick = (player.get("picks") or {}).get(rnd.get("round_key")) or {}
-            team = _short(pick.get("team"))
+            team = short_team(pick.get("team"))
             # Highlight a surviving pick, but never over a red row — the red
             # already carries the important information.
             if team and pick.get("is_winner") and not eliminated:
