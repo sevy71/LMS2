@@ -774,6 +774,41 @@ def casualties_grid(round_obj: Round, gone: int) -> str | None:
     )
 
 
+def teamsheet_image(round_obj: Round) -> str | None:
+    """Who backed what in a round, grouped by club.
+
+    Goes out in place of the casualties table when a round knocks nobody out.
+    There is no bad news to draw, so the news is the state of play: every name
+    under the club that carried it. The cumulative grid answers how we got
+    here; this answers who is on what, which is the only question a round
+    without a single elimination leaves open.
+    """
+    from grid_image import render_team_table
+
+    try:
+        rows = (
+            Pick.query.filter_by(round_id=round_obj.id)
+            .join(Player, Player.id == Pick.player_id)
+            .add_columns(Player.name)
+            .all()
+        )
+        groups, outcomes = {}, {}
+        for pick, name in rows:
+            groups.setdefault(pick.team_picked, []).append(name)
+            outcomes[pick.team_picked] = pick.is_winner
+        if not groups:
+            return None
+        return render_team_table(
+            [(team, names, outcomes[team]) for team, names in groups.items()],
+            os.path.join(EXPORTS_DIR, f"grid-r{round_obj.round_number}-teams.png"),
+            f"Last Man Standing — Cycle {round_obj.cycle_number or 1}",
+            f"Round {round_obj.round_number} — who backed what",
+        )
+    except Exception as exc:
+        logger.warning("could not render the team sheet: %s", exc)
+        return None
+
+
 def _round_picks(round_obj: Round) -> list:
     """(name, team) for every pick in a round."""
     rows = (
@@ -934,9 +969,15 @@ def publish_digests(dry_run: bool = False) -> list[str]:
         if not Pick.query.filter_by(round_id=round_obj.id).first():
             continue
         # Only the players who went out this round, so the table shrinks as
-        # the cycle wears on. Nobody out means nothing worth drawing.
+        # the cycle wears on. A round that took nobody out has no casualty
+        # list to draw, so it sends the team sheet instead of nothing.
         gone = Pick.query.filter_by(round_id=round_obj.id, is_eliminated=True).count()
-        path = None if dry_run or not gone else casualties_grid(round_obj, gone)
+        if dry_run:
+            path = None
+        elif gone:
+            path = casualties_grid(round_obj, gone)
+        else:
+            path = teamsheet_image(round_obj)
         text = results_digest(round_obj)
         result = _send_to_admin(text, f"results-{round_obj.id}", dry_run, image=path)
         notes.append(

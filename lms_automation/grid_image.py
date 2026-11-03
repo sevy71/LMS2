@@ -182,3 +182,82 @@ def render_picks_grid(
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     img.save(out_path, "PNG")
     return out_path
+
+
+# Team-sheet layout. Names run three to a row under each team's band, because
+# a round where thirty people back one club is otherwise a thirty-row column
+# nobody scrolls to the end of.
+TEAM_COL_W = 176
+TEAM_COLS = 3
+COL_BAND_WON = (198, 230, 198)
+COL_BAND_LOST = (240, 190, 186)
+COL_BAND_PLAIN = COL_HEADER_BG
+
+
+def render_team_table(
+    groups: list,
+    out_path: str,
+    title: str,
+    subtitle: str | None = None,
+) -> str:
+    """Draw who backed what, grouped by club, and return the path written.
+
+    ``groups`` is ``(team, [player names], won)``, where ``won`` may be None
+    when the round has not been settled. The cumulative grid answers "how did
+    we get here"; this answers "who is on what", which is the only question
+    worth asking in a round that knocked nobody out.
+    """
+    groups = [(t, sorted(names), won) for t, names, won in groups if names]
+    groups.sort(key=lambda g: (-len(g[1]), g[0].lower()))
+
+    def name_rows(names):
+        return (len(names) + TEAM_COLS - 1) // TEAM_COLS
+
+    total_rows = sum(1 + name_rows(names) for _, names, _ in groups) or 1
+
+    head_h = TITLE_H + (SUBTITLE_H if subtitle else 0)
+    width = PAD * 2 + TEAM_COL_W * TEAM_COLS
+    height = PAD * 2 + head_h + ROW_H * total_rows
+
+    img = Image.new("RGB", (width, height), "white")
+    d = ImageDraw.Draw(img)
+    f_title = ImageFont.truetype(FONT_BOLD, 19)
+    f_sub = ImageFont.truetype(FONT_REGULAR, 13)
+    f_band = ImageFont.truetype(FONT_BOLD, 14)
+    f_name = ImageFont.truetype(FONT_REGULAR, 13)
+
+    d.text((PAD, PAD), title, font=f_title, fill=COL_TEXT)
+    if subtitle:
+        d.text((PAD, PAD + TITLE_H - 4), subtitle, font=f_sub, fill=COL_SUBTITLE)
+
+    y = PAD + head_h
+    for team, names, won in groups:
+        band = (
+            COL_BAND_WON if won else COL_BAND_LOST if won is False else COL_BAND_PLAIN
+        )
+        d.rectangle([PAD, y, width - PAD, y + ROW_H], fill=band)
+        d.text(
+            (PAD + 8, y + 8),
+            f"{short_team(team)} — {len(names)}",
+            font=f_band,
+            fill=COL_TEXT,
+        )
+        d.line([PAD, y, width - PAD, y], fill=COL_GRID)
+        y += ROW_H
+
+        for row in range(name_rows(names)):
+            if row % 2:
+                d.rectangle([PAD, y, width - PAD, y + ROW_H], fill=COL_ROW_B)
+            for col in range(TEAM_COLS):
+                i = row * TEAM_COLS + col
+                if i >= len(names):
+                    break
+                x = PAD + col * TEAM_COL_W
+                d.text((x + 10, y + 9), names[i], font=f_name, fill=COL_TEXT)
+            y += ROW_H
+
+    d.rectangle([PAD, PAD + head_h, width - PAD, y], outline=COL_GRID)
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    img.save(out_path, "PNG")
+    return out_path
