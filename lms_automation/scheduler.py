@@ -533,6 +533,24 @@ def results_quip(out: list, through: list, still_in: int, seed: int) -> str:
         )
 
     if not out:
+        # A quiet round means something different to a field of forty-eight
+        # than it does to the last two, who have just both got it right
+        # again. The lines below were written for a crowd, so the endgame
+        # has to be caught before them rather than after.
+        if still_in == 2 and len(through) == 2:
+            names = sorted(name for name, _ in through)
+            return (
+                f"🤝 Both through — {names[0]} and {names[1]} go again. "
+                "One of you is going to have to blink."
+            )
+        if still_in <= 5:
+            return _one_of(
+                [
+                    f"😬 Nobody out. All {still_in} of you survive to the next round.",
+                    f"😬 No casualties — the last {still_in} all got it right. Again.",
+                ],
+                seed,
+            )
         return _one_of(
             [
                 "😴 Not a scratch. Everyone's through and nobody's interesting.",
