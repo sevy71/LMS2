@@ -79,6 +79,20 @@ def _pick_counts(round_obj: Round) -> tuple[int, int]:
     return submitted, active
 
 
+def _unpicked_active(round_obj: Round) -> int:
+    """Active players with no pick in this round.
+
+    Not active minus submitted: once results start landing, eliminated players
+    leave the active count but their picks remain, so the subtraction goes
+    negative and hides anyone genuinely missing.
+    """
+    picked = {pick.player_id for pick in Pick.query.filter_by(round_id=round_obj.id).all()}
+    return sum(
+        1 for player in Player.query.filter_by(status="active").all()
+        if player.id not in picked
+    )
+
+
 def _last_kickoff(round_obj: Round) -> datetime | None:
     latest = None
     for fixture in round_obj.fixtures or []:
@@ -155,24 +169,34 @@ def build_plan(now: datetime | None = None) -> Plan:
     # Deadline has passed. Phases are driven by time, not by pick completeness:
     # a round whose auto-picks fall short must still progress to results rather
     # than stalling here forever.
-    missing = active_players - submitted
+    missing = _unpicked_active(round_obj)
 
     if kickoff and now < kickoff:
-        # The only window where auto-picks are allowed — app.py blocks them
-        # once the first ball is kicked.
+        # The normal window for auto-picks: after the deadline, before a ball
+        # is kicked, with every team still available.
         plan.phase = "deadline-passed"
         if missing > 0:
             plan.actions.append("apply-missed-picks")
             plan.notes.append(f"{missing} players without a pick")
         return plan
 
-    if missing > 0:
-        plan.notes.append(
-            f"{missing} players still without a pick, and kickoff has passed — "
-            "auto-pick is no longer permitted, needs an admin"
-        )
-
     last_kickoff = _last_kickoff(round_obj)
+    if missing > 0:
+        if last_kickoff and now < last_kickoff:
+            # The hour before kickoff was missed. A late auto-pick is still
+            # possible while a match remains to be played; app.py limits it
+            # to teams that have not kicked off.
+            plan.actions.append("apply-missed-picks")
+            plan.notes.append(
+                f"{missing} players still without a pick after kickoff — "
+                "auto-picking from the matches yet to start"
+            )
+        else:
+            plan.notes.append(
+                f"{missing} players still without a pick and every match has "
+                "kicked off — needs an admin"
+            )
+
     if last_kickoff and now < last_kickoff:
         plan.phase = "in-play"
         plan.notes.append(f"last kickoff {last_kickoff:%a %d %b %H:%M} UTC")
@@ -426,20 +450,46 @@ def reconcile_deliveries() -> str:
         return "nothing to reconcile"
 
     client = _admin_client()
-    marked, failed, handled = 0, 0, []
+    marked, failed, handled, digests = 0, 0, [], 0
     for item in items:
         handled.append(item["id"])
-        if item.get("outcome") == "sent":
-            # A ref may cover several reminders when one message went to a
-            # shared handset.
-            for reminder_id in str(item["ref"]).split(","):
-                client.post(f"/api/admin/mark-reminder-sent/{reminder_id.strip()}")
+        ref = str(item.get("ref") or "")
+        sent = item.get("outcome") == "sent"
+
+        # Digests share this queue. They are recorded as published here, on
+        # delivery, for the reason reminders are: being accepted onto the
+        # queue is not being sent. A digest that fails is left unpublished so
+        # the next tick queues it again.
+        digest = _digest_ref(ref)
+        if digest:
+            kind, round_id = digest
+            if sent:
+                _mark_published(kind, round_id)
+                digests += 1
+            else:
+                attempts = _note_digest_failure(ref)
+                failed += 1
+                logger.warning(
+                    "digest %s failed to deliver (attempt %s of %s): %s",
+                    ref, attempts, DIGEST_MAX_ATTEMPTS, (item.get("error") or "")[:120],
+                )
+            continue
+
+        # A ref may cover several reminders when one message went to a shared
+        # handset. Anything that is not a reminder id — a one-off message sent
+        # by hand through the same sender — is none of this function's business.
+        reminder_ids = [part.strip() for part in ref.split(",") if part.strip().isdigit()]
+        if not reminder_ids:
+            continue
+        if sent:
+            for reminder_id in reminder_ids:
+                client.post(f"/api/admin/mark-reminder-sent/{reminder_id}")
                 marked += 1
         else:
             failed += 1
             logger.warning(
                 "delivery failed for reminder %s, left pending: %s",
-                item.get("ref"), (item.get("error") or "")[:120],
+                ref, (item.get("error") or "")[:120],
             )
 
     try:
@@ -454,7 +504,11 @@ def reconcile_deliveries() -> str:
         # idempotent, so a duplicate pass is harmless.
         logger.warning("could not acknowledge outcomes: %s", exc)
 
-    return f"marked {marked} delivered" + (f", {failed} failed and left pending" if failed else "")
+    return (
+        f"marked {marked} delivered"
+        + (f", {digests} digest(s) confirmed sent" if digests else "")
+        + (f", {failed} failed and left pending" if failed else "")
+    )
 
 
 # Where the round digests are sent. These go to the organiser, who forwards
@@ -483,16 +537,46 @@ def _published() -> dict:
         return {"results": [], "table": []}
 
 
-def _mark_published(kind: str, round_id: int) -> None:
+def _save_published(state: dict) -> None:
     import json
 
-    state = _published()
-    state.setdefault(kind, []).append(round_id)
     try:
         with open(PUBLISH_STATE_PATH, "w") as fh:
             json.dump(state, fh)
     except Exception as exc:
         logger.warning("could not record published digest: %s", exc)
+
+
+def _mark_published(kind: str, round_id: int) -> None:
+    state = _published()
+    if round_id not in state.setdefault(kind, []):
+        state[kind].append(round_id)
+    _save_published(state)
+
+
+# A digest that keeps failing is retried on later ticks, but not for ever: a
+# message WhatsApp will not take is not improved by a fortieth attempt.
+DIGEST_MAX_ATTEMPTS = 3
+
+
+def _digest_ref(ref: str) -> tuple[str, int] | None:
+    """Split a digest's sender ref, "results-68", into its kind and round id."""
+    kind, _, round_id = str(ref).partition("-")
+    if kind in ("results", "table") and round_id.isdigit():
+        return kind, int(round_id)
+    return None
+
+
+def _digest_failures(ref: str) -> int:
+    return int(_published().get("failures", {}).get(ref, 0))
+
+
+def _note_digest_failure(ref: str) -> int:
+    state = _published()
+    failures = state.setdefault("failures", {})
+    failures[ref] = int(failures.get(ref, 0)) + 1
+    _save_published(state)
+    return failures[ref]
 
 
 def _team(name: str | None) -> str:
@@ -684,9 +768,11 @@ def results_digest(round_obj: Round) -> str:
         .add_columns(Player.name)
         .all()
     )
-    out, through = [], []
+    out, through, byes = [], [], []
     for pick, name in picks:
         (through if pick.is_winner else out).append((name, _team(pick.team_picked)))
+        if pick.is_winner and pick.auto_reason == "postponement_late":
+            byes.append((name, _team(pick.team_picked)))
 
     # The digest is written after the round has been closed, and closing the
     # last round of a game changes everyone's status: a win takes the winner
@@ -719,6 +805,12 @@ def results_digest(round_obj: Round) -> str:
         lines.append("")
     else:
         lines.append("❌ Nobody went out this round.")
+        lines.append("")
+
+    if byes:
+        lines.append(f"🎟️ Through on a bye — match postponed ({len(byes)}):")
+        for name, team in sorted(byes):
+            lines.append(f"• {name} — {team}")
         lines.append("")
 
     # Only one survivor count. "Through this round" and "still in the game" are
@@ -903,8 +995,11 @@ def _send_to_admin(text: str, ref: str, dry_run: bool, image: str | None = None)
             headers={"x-sender-token": SENDER_TOKEN},
             timeout=10,
         )
-        if response.status_code in (202, 409):
+        if response.status_code == 202:
             return "queued to the organiser"
+        if response.status_code == 409:
+            # Already on the sender's queue, or sent and not yet reconciled.
+            return "in flight"
         return f"FAILED [{response.status_code}] {response.text[:100]}"
     except Exception as exc:
         return f"sender unreachable: {exc}"
@@ -936,6 +1031,8 @@ def publish_digests(dry_run: bool = False) -> list[str]:
     for round_obj in Round.query.filter(Round.status == "active").all():
         if round_obj.id in state.get("table", []):
             continue
+        if _digest_failures(f"table-{round_obj.id}") >= DIGEST_MAX_ATTEMPTS:
+            continue
         active = Player.query.filter_by(status="active").count()
         submitted = Pick.query.filter_by(round_id=round_obj.id).count()
         if submitted < active:
@@ -952,13 +1049,15 @@ def publish_digests(dry_run: bool = False) -> list[str]:
                 picks_quip(_round_picks(round_obj), round_obj.id),
             ]
         )
+        # Not marked as published here. That happens in reconcile_deliveries
+        # once the sender reports it actually went; until then each tick
+        # offers it again and the sender answers "in flight".
         result = _send_to_admin(text, f"table-{round_obj.id}", dry_run, image=path)
-        notes.append(
-            f"picks grid R{round_obj.round_number}: {result}"
-            + (f" (image: {os.path.basename(path)})" if path else "")
-        )
-        if not dry_run and result.startswith("queued"):
-            _mark_published("table", round_obj.id)
+        if result != "in flight":
+            notes.append(
+                f"picks grid R{round_obj.round_number}: {result}"
+                + (f" (image: {os.path.basename(path)})" if path else "")
+            )
 
     # Results digest — only for rounds that have finished recently. Without a
     # recency bound this happily offered to send digests for rounds that ended
@@ -973,6 +1072,8 @@ def publish_digests(dry_run: bool = False) -> list[str]:
     for round_obj in recent:
         if round_obj.id in state.get("results", []):
             continue
+        if _digest_failures(f"results-{round_obj.id}") >= DIGEST_MAX_ATTEMPTS:
+            continue
         if not round_obj.first_kickoff_at or round_obj.first_kickoff_at < cutoff:
             continue
         if not Pick.query.filter_by(round_id=round_obj.id).first():
@@ -983,12 +1084,11 @@ def publish_digests(dry_run: bool = False) -> list[str]:
         path = None if dry_run or not gone else casualties_grid(round_obj, gone)
         text = results_digest(round_obj)
         result = _send_to_admin(text, f"results-{round_obj.id}", dry_run, image=path)
-        notes.append(
-            f"results R{round_obj.round_number}: {result}"
-            + (f" (image: {os.path.basename(path)})" if path else "")
-        )
-        if not dry_run and result.startswith("queued"):
-            _mark_published("results", round_obj.id)
+        if result != "in flight":
+            notes.append(
+                f"results R{round_obj.round_number}: {result}"
+                + (f" (image: {os.path.basename(path)})" if path else "")
+            )
 
     return notes
 
