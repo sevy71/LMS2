@@ -8,6 +8,7 @@ import urllib.parse
 from functools import wraps
 from io import BytesIO
 from sqlalchemy import or_
+from werkzeug.security import check_password_hash, generate_password_hash
 
 # --- Environment loading ---
 # Load .env.local if it exists (for local development with Postgres connection)
@@ -128,7 +129,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from models import (db, Player, Round, Fixture, Pick, PickToken, ReminderSchedule,
-                    CyclePayment, PICK_DEADLINE_LEAD)
+                    CyclePayment, AppSetting, PICK_DEADLINE_LEAD)
 
 
 # Initialize db with app
@@ -976,6 +977,14 @@ def _ensure_minimum_schema():
             except Exception as e:
                 app.logger.warning(f'Could not create reminder_schedules: {e}')
 
+        # Create app_settings table if missing (holds a changed admin password)
+        if not insp.has_table('app_settings'):
+            try:
+                AppSetting.__table__.create(bind=engine, checkfirst=True)
+                app.logger.info('Created missing table app_settings')
+            except Exception as e:
+                app.logger.warning(f'Could not create app_settings: {e}')
+
         # Create cycle_payments table if missing (for per-cycle payment tracking)
         if not insp.has_table('cycle_payments'):
             try:
@@ -1183,6 +1192,38 @@ def generate_picks_grid_xlsx():
         print(f"Error generating XLSX: {e}")
         return None
 
+ADMIN_PASSWORD_KEY = 'admin_password_hash'
+
+
+def _stored_admin_password_hash():
+    """The password hash set from the dashboard, or None if never changed."""
+    try:
+        row = db.session.get(AppSetting, ADMIN_PASSWORD_KEY)
+        return row.value if row and row.value else None
+    except Exception as e:
+        db.session.rollback()
+        app.logger.warning(f'Could not read stored admin password: {e}')
+        return None
+
+
+def _admin_password_ok(candidate) -> bool:
+    """Check a password against the one in force.
+
+    A password changed from the dashboard replaces ADMIN_PASSWORD outright —
+    if the old one still worked alongside it, changing a leaked password
+    would revoke nothing. Deleting the app_settings row falls back to the
+    environment variable.
+    """
+    if not candidate:
+        return False
+    stored = _stored_admin_password_hash()
+    if stored:
+        return check_password_hash(stored, candidate)
+    if not ADMIN_PASSWORD:
+        return False
+    return secrets.compare_digest(candidate.encode('utf-8'), ADMIN_PASSWORD.encode('utf-8'))
+
+
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -1195,10 +1236,10 @@ def admin_required(f):
 def admin_login():
     if request.method == 'POST':
         password = request.form.get('password')
-        if not ADMIN_PASSWORD:
+        if not ADMIN_PASSWORD and not _stored_admin_password_hash():
             flash('Admin access is not configured on this server', 'error')
             return render_template('admin_login.html')
-        if password and secrets.compare_digest(password, ADMIN_PASSWORD):
+        if _admin_password_ok(password):
             session['admin_logged_in'] = True
             session.permanent = True
             next_page = request.args.get('next') or url_for('admin_dashboard')
@@ -1218,31 +1259,38 @@ def admin_logout():
 @admin_required
 def change_admin_password():
     try:
-        global ADMIN_PASSWORD
-        data = request.get_json()
+        data = request.get_json() or {}
         current_password = data.get('current_password')
         new_password = data.get('new_password')
-        
+
         if not current_password or not new_password:
             return jsonify({'success': False, 'error': 'Current and new password are required'}), 400
-        
-        if current_password != ADMIN_PASSWORD:
+
+        if not _admin_password_ok(current_password):
             return jsonify({'success': False, 'error': 'Current password is incorrect'}), 400
-        
+
         if len(new_password) < 6:
             return jsonify({'success': False, 'error': 'New password must be at least 6 characters'}), 400
-        
-        # In a real app, you'd update the password in a database or config file
-        # For now, we'll just update the environment variable (temporary)
-        ADMIN_PASSWORD = new_password
-        os.environ['ADMIN_PASSWORD'] = new_password
-        
+
+        # Stored in the database as a hash, so the change holds in every
+        # worker and across restarts and deploys. Setting a module global did
+        # neither: other workers kept the old password and the next deploy
+        # restored it everywhere, while this endpoint reported success.
+        row = db.session.get(AppSetting, ADMIN_PASSWORD_KEY)
+        if row is None:
+            row = AppSetting(key=ADMIN_PASSWORD_KEY)
+            db.session.add(row)
+        row.value = generate_password_hash(new_password, method='pbkdf2:sha256')
+        db.session.commit()
+
         return jsonify({
             'success': True,
-            'message': 'Password changed successfully. Please update your ADMIN_PASSWORD environment variable in Railway.'
+            'message': 'Password changed. The new password is the only one that works from now on — '
+                       'the ADMIN_PASSWORD variable in Railway no longer applies.'
         })
-        
+
     except Exception as e:
+        db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/picks-grid')
@@ -1868,24 +1916,46 @@ def apply_missed_picks(round_id):
             return jsonify({'success': False, 'error': 'Cannot determine first kickoff or deadline for this round'}), 400
 
         now_utc = datetime.utcnow()
+        late = anchor <= now_utc
+        auto_reason = 'missed_deadline'
 
-        # SAFEGUARD: Block auto-picks if kickoff is in the past (stale data protection)
-        if anchor <= now_utc:
-            app.logger.warning(
-                f"AUTO-PICK BLOCKED: Round {round_obj.id} kickoff in past ({anchor.isoformat()})"
-            )
-            return jsonify({
-                'success': False,
-                'error': f'Auto-pick blocked: kickoff time ({anchor.isoformat()}) is in the past. '
-                         f'This may indicate stale fixture data. Please verify round fixtures.'
-            }), 400
+        if late:
+            # Auto-picks used to be refused outright once the first match had
+            # kicked off. They normally run in the hour before it, but if that
+            # hour is missed — the machine was off, or could not reach the
+            # database — a player with no pick stayed unpicked, the round
+            # completed around them, and they went through without risking a
+            # team. A late auto-pick is still fair provided it cannot be a
+            # team whose result is already known, so it is limited to matches
+            # yet to kick off.
+            #
+            # The stale-data protection survives in a narrower form: a round
+            # whose every fixture is in the past, or which is no longer
+            # active, is still refused.
+            eligible_teams = set()
+            for fx in round_obj.fixtures or []:
+                if fx.status in ('completed', 'postponed') or not (fx.date and fx.time):
+                    continue
+                if datetime.combine(fx.date, fx.time) > now_utc:
+                    eligible_teams.update(t for t in (fx.home_team, fx.away_team) if t)
+            if round_obj.status != 'active' or not eligible_teams:
+                app.logger.warning(
+                    f"AUTO-PICK BLOCKED: Round {round_obj.id} has no fixture left to kick off "
+                    f"(first kickoff {anchor.isoformat()}, status {round_obj.status})"
+                )
+                return jsonify({
+                    'success': False,
+                    'error': f'Auto-pick blocked: kickoff time ({anchor.isoformat()}) is in the past and '
+                             f'no fixture in this round is still to kick off. '
+                             f'This may indicate stale fixture data. Please verify round fixtures.'
+                }), 400
+            auto_reason = 'missed_deadline_late'
+        else:
+            cutoff = anchor - timedelta(hours=1)
+            if (now_utc < cutoff) and (not dry_run):
+                return jsonify({'success': False, 'error': 'Cutoff not reached yet. Try after the submission deadline.'}), 400
+            eligible_teams = _eligible_teams_for_round(round_obj)
 
-        cutoff = anchor - timedelta(hours=1)
-        if (now_utc < cutoff) and (not dry_run):
-            return jsonify({'success': False, 'error': 'Cutoff not reached yet. Try after the submission deadline.'}), 400
-
-        # Build sets
-        eligible_teams = _eligible_teams_for_round(round_obj)
         active_players = Player.query.filter_by(status='active').all()
         applied = []
         skipped = []
@@ -1901,7 +1971,10 @@ def apply_missed_picks(round_id):
 
             # Strategy 1: past winning picks → opposing team of that match
             candidate = None
-            past_picks = Pick.query.filter_by(player_id=player.id).join(Round).order_by(Round.round_number.desc()).all()
+            # Newest first by round id. round_number restarts at 1 every
+            # cycle, so ordering on it put last spring's rounds 21-28 ahead of
+            # last week's round 5 and "most recent" meant nothing of the sort.
+            past_picks = Pick.query.filter_by(player_id=player.id).join(Round).order_by(Round.id.desc()).all()
             for past in past_picks:
                 if past.is_winner is True:
                     opp = _opposing_team_from_past_pick(past)
@@ -1925,7 +1998,7 @@ def apply_missed_picks(round_id):
                 db.session.add(pick)
                 db.session.flush()
                 # Audit
-                log_auto_pick(pick, reason='missed_deadline')
+                log_auto_pick(pick, reason=auto_reason)
 
             applied.append({'player': player.name, 'team': candidate})
 
@@ -3123,6 +3196,26 @@ def get_round_picks(round_id):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+def _match_is_off(fixture: Fixture, api_match: dict) -> bool:
+    """Has this fixture been postponed or cancelled since the round was built?
+
+    The API marks a postponed match POSTPONED only until a new date is found;
+    after that it is an ordinary scheduled match again, just weeks away. So a
+    kickoff that has moved by days counts as well as the status itself.
+    """
+    if api_match.get('status') in ('POSTPONED', 'CANCELLED'):
+        return True
+    if api_match.get('status') in ('SCHEDULED', 'TIMED') and fixture.date and fixture.time:
+        try:
+            new_kickoff = datetime.fromisoformat(
+                api_match['utcDate'].replace('Z', '+00:00')
+            ).replace(tzinfo=None)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return False
+        return new_kickoff - datetime.combine(fixture.date, fixture.time) > timedelta(days=3)
+    return False
+
+
 @app.route('/api/rounds/<int:round_id>/auto-populate-results', methods=['POST'])
 @admin_required
 def auto_populate_results(round_id):
@@ -3153,6 +3246,7 @@ def auto_populate_results(round_id):
             return jsonify({'success': False, 'error': 'Unable to fetch results from football API'}), 500
         
         updated_count = 0
+        postponed_count = 0
         api_matches = fixtures_data['matches']
         
         # Update fixtures with API results
@@ -3161,7 +3255,24 @@ def auto_populate_results(round_id):
             for api_match in api_matches:
                 if (api_match.get('homeTeam', {}).get('name') == fixture.home_team and 
                     api_match.get('awayTeam', {}).get('name') == fixture.away_team):
-                    
+
+                    # A match called off never reaches FINISHED, so a pick on
+                    # it never resolved and the round sat open indefinitely.
+                    # Record the postponement; process-results turns it into
+                    # the bye the rules give. Once postponed it stays so for
+                    # this round, even if the match is replayed a day later —
+                    # the bye has been given and cannot be taken back.
+                    if fixture.status == 'postponed':
+                        break
+                    if fixture.status != 'completed' and _match_is_off(fixture, api_match):
+                        fixture.status = 'postponed'
+                        postponed_count += 1
+                        app.logger.warning(
+                            f"POSTPONED: {fixture.home_team} v {fixture.away_team} "
+                            f"(round {round_obj.id}, API status {api_match.get('status')})"
+                        )
+                        break
+
                     # Check if match is finished and has scores
                     if api_match.get('status') == 'FINISHED':
                         score = api_match.get('score', {})
@@ -3176,13 +3287,17 @@ def auto_populate_results(round_id):
                             updated_count += 1
                     break
         
-        if updated_count > 0:
+        if updated_count > 0 or postponed_count > 0:
             db.session.commit()
-            
+
+        message = f'Updated {updated_count} fixtures with results from API'
+        if postponed_count:
+            message += f'; {postponed_count} marked postponed'
         return jsonify({
             'success': True,
             'updated_fixtures': updated_count,
-            'message': f'Updated {updated_count} fixtures with results from API'
+            'postponed_fixtures': postponed_count,
+            'message': message
         })
         
     except Exception as e:
@@ -3962,7 +4077,9 @@ def process_round_results(round_id):
             
             if fixture_id and home_score is not None and away_score is not None:
                 fixture = Fixture.query.get(fixture_id)
-                if fixture:
+                # A postponed fixture has already handed out byes; a score
+                # arriving later must not turn one into an elimination.
+                if fixture and fixture.status != 'postponed':
                     fixture.home_score = int(home_score)
                     fixture.away_score = int(away_score)
                     fixture.status = 'completed'
@@ -4003,9 +4120,35 @@ def process_round_results(round_id):
                             pick.player.status = 'eliminated'
                             eliminated_players.append(pick.player.name)
         
+        # Late postponement: the rules give the player a bye to the next
+        # round, and the team they picked still counts as used. Results are
+        # only ever processed once the round is under way, which is the
+        # "late" case by definition; an early postponement, where the player
+        # may re-pick, is still handled by hand.
+        bye_players = []
+        for fixture in Fixture.query.filter_by(round_id=round_id, status='postponed').all():
+            for pick in Pick.query.filter(
+                Pick.round_id == round_id,
+                Pick.team_picked.in_([fixture.home_team, fixture.away_team]),
+                Pick.is_winner.is_(None),
+            ).all():
+                pick.is_winner = True
+                pick.is_eliminated = False
+                pick.auto_reason = 'postponement_late'
+                pick.postponed_event_id = fixture.event_id
+                pick.announcement_time = datetime.utcnow()
+                surviving_players.append(pick.player.name)
+                bye_players.append(pick.player.name)
+                app.logger.info(
+                    f"BYE: {pick.player.name} — {pick.team_picked} postponed "
+                    f"({fixture.home_team} v {fixture.away_team})"
+                )
+
         # Check fixture completion status
         total_fixtures = Fixture.query.filter_by(round_id=round_id).count()
         completed_fixtures = Fixture.query.filter_by(round_id=round_id, status='completed').count()
+        postponed_fixtures = Fixture.query.filter_by(round_id=round_id, status='postponed').count()
+        fixtures_remaining = total_fixtures - completed_fixtures - postponed_fixtures
 
         # Check current player status after processing these results
         active_players_count = Player.query.filter_by(status='active').count()
@@ -4028,7 +4171,20 @@ def process_round_results(round_id):
 
         # A round is decided once every pick has an outcome, whether or not
         # fixtures remain that nobody chose.
-        picks_all_resolved = bool(round_picks) and all(
+        #
+        # "Every pick" has to include the picks that are not there. A player
+        # still active with no pick has not been decided, and closing the
+        # round around them sent them through without risking a team; the
+        # round stays open so a late auto-pick can still reach them, until
+        # there is no fixture left for it to use.
+        picked_ids = {p.player_id for p in round_picks}
+        unpicked_active = [
+            p.name for p in Player.query.filter_by(status='active').all()
+            if p.id not in picked_ids
+        ]
+        if unpicked_active:
+            app.logger.warning(f"  {len(unpicked_active)} active player(s) with no pick: {unpicked_active[:5]}")
+        picks_all_resolved = bool(round_picks) and not unpicked_active and all(
             p.is_winner is not None for p in round_picks
         )
 
@@ -4090,7 +4246,7 @@ def process_round_results(round_id):
         #
         # A round is over once every player's team has played. Remaining
         # fixtures cannot change anyone's fate.
-        elif picks_all_resolved or completed_fixtures == total_fixtures:
+        elif picks_all_resolved or fixtures_remaining <= 0:
             if picks_all_resolved and completed_fixtures < total_fixtures:
                 app.logger.info(
                     f">>> NORMAL COMPLETION: all {len(round_picks)} picks resolved with "
@@ -4151,6 +4307,8 @@ def process_round_results(round_id):
             'total_surviving': len(set(surviving_players)),
             'fixtures_completed': completed_fixtures,
             'fixtures_total': total_fixtures,
+            'fixtures_postponed': postponed_fixtures,
+            'byes': sorted(set(bye_players)),
             'xlsx_generated': xlsx_file is not None,
             'xlsx_filename': xlsx_filename
         }
@@ -5065,7 +5223,13 @@ def make_pick(token):
     player = pick_token.player
     round_obj = pick_token.round
 
-    if not pick_token.is_valid():
+    # The deadline is checked here as well as through the token's expiry, so
+    # a link that is somehow still alive cannot be used once picks have
+    # closed or the round is over.
+    deadline = round_obj.pick_deadline
+    closed = round_obj.status != 'active' or (deadline is not None and datetime.utcnow() > deadline)
+
+    if closed or not pick_token.is_valid():
         # A player whose pick is already recorded should see it, not an error.
         # Links are expired the moment the last player picks, so anyone coming
         # back to double-check finds their link dead — and a bare "expired"
@@ -5084,7 +5248,7 @@ def make_pick(token):
                                  locked=True,   # viewing, not updating
                                  token=token,
                                  player_nav_only=True)
-        error = "This pick link has expired" if pick_token.expires_at and datetime.utcnow() > pick_token.expires_at else "This pick link has already been used"
+        error = "This pick link has expired" if closed or (pick_token.expires_at and datetime.utcnow() > pick_token.expires_at) else "This pick link has already been used"
         return render_template('pick_error.html', error=error, player_nav_only=True), 400
     
     # Check if player already has a pick for this round
@@ -5248,33 +5412,91 @@ def register_with_whatsapp(whatsapp_number):
     decoded_number = urllib.parse.unquote(whatsapp_number)
     return render_template('player_registration.html', whatsapp_number=decoded_number)
 
+def _game_in_progress() -> bool:
+    """Has the current game got past the point where someone can fairly join?
+
+    A game is joinable until picks close on its first round. After that the
+    field has thinned, and a newcomer would be walking in level with players
+    who have survived every round so far.
+    """
+    latest = Round.query.order_by(Round.id.desc()).first()
+    if latest is None:
+        return False
+    cycle = latest.cycle_number or 1
+    first = Round.query.filter_by(cycle_number=cycle).order_by(Round.id.asc()).first()
+    if Round.query.filter_by(cycle_number=cycle).count() > 1:
+        return True
+    if first.status == 'completed':
+        return True
+    deadline = first.pick_deadline
+    return deadline is not None and datetime.utcnow() > deadline
+
+
+# Registration is open to anyone holding the link, so it is throttled per
+# address. In memory and per worker: enough to stop a loop, not a determined
+# attacker, which is the right size of lock for a game among friends.
+_registration_log = {}
+REGISTRATIONS_PER_HOUR = 5
+
+
+def _registration_allowed(address: str) -> bool:
+    now = datetime.utcnow()
+    recent = [t for t in _registration_log.get(address, []) if now - t < timedelta(hours=1)]
+    allowed = len(recent) < REGISTRATIONS_PER_HOUR
+    if allowed:
+        recent.append(now)
+    _registration_log[address] = recent
+    return allowed
+
+
 @app.route('/api/register', methods=['POST'])
 def api_register_player():
     """Register a new player via the public registration form"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         
-        if not data or not data.get('name'):
+        if not data or not str(data.get('name') or '').strip():
             return jsonify({'success': False, 'error': 'Player name is required'}), 400
         
-        name = data['name'].strip()
-        whatsapp = data.get('whatsapp_number', '').strip() or None
+        name = str(data['name']).strip()
+        whatsapp = str(data.get('whatsapp_number') or '').strip() or None
+
+        if len(name) > 60:
+            return jsonify({'success': False, 'error': 'That name is too long'}), 400
+        if whatsapp and len(whatsapp) > 20:
+            return jsonify({'success': False, 'error': 'That phone number is too long'}), 400
+
+        address = (request.headers.get('X-Forwarded-For') or request.remote_addr or '').split(',')[0].strip()
+        if not _registration_allowed(address):
+            return jsonify({'success': False, 'error': 'Too many registrations from here — try again later'}), 429
         
         # Check if player with same name already exists
         existing_player = Player.query.filter_by(name=name).first()
         if existing_player:
             return jsonify({'success': False, 'error': 'Player with this name already exists'}), 400
         
-        # Create new player
+        # Anyone with the link can register, and a new player used to be
+        # 'active' on the spot — in the round already being played, however
+        # few were left in it, and a contender for the pot. Someone who
+        # registers once a game is under way now sits out until the next one:
+        # 'eliminated' is the status both a rollover and Start New Game
+        # reactivate, so they join automatically when it begins.
+        joins_next_game = _game_in_progress()
         player = Player(
             name=name,
-            whatsapp_number=sanitize_phone_number(whatsapp) if whatsapp else None
+            whatsapp_number=sanitize_phone_number(whatsapp) if whatsapp else None,
+            status='eliminated' if joins_next_game else 'active'
         )
         
         db.session.add(player)
         db.session.commit()
-        
-        return jsonify({'success': True, 'message': f'Welcome {name}! You have been registered successfully.'})
+
+        if joins_next_game:
+            message = (f'Welcome {name}! You are registered. The current game is already under way, '
+                       f'so you will be in from the start of the next one.')
+        else:
+            message = f'Welcome {name}! You have been registered successfully.'
+        return jsonify({'success': True, 'message': message})
         
     except Exception as e:
         db.session.rollback()

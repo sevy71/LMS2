@@ -145,24 +145,33 @@ class PickToken(db.Model):
         - Reuse existing token only if it's still valid and not forced to regenerate.
         - Prefer setting expiry to the round deadline (end_date) when available.
         """
-        # Try to reuse an existing valid token unless forced
+        round_obj = Round.query.get(round_id)
+        deadline = round_obj.pick_deadline if round_obj else None
+        closed = deadline is not None and datetime.utcnow() > deadline
+
+        # Try to reuse an existing token unless forced. Once picks have closed
+        # there is nothing a fresh token could be used for, so the existing
+        # one is handed back even though it has expired rather than minting
+        # another dead link on every call.
         if not force_new:
             existing_token = PickToken.query.filter_by(
                 player_id=player_id,
                 round_id=round_id
-            ).first()
-            if existing_token and existing_token.is_valid():
+            ).order_by(PickToken.id.desc()).first()
+            if existing_token and (existing_token.is_valid() or closed):
                 return existing_token
 
-        # Determine expiry from round deadline when present
-        round_obj = Round.query.get(round_id)
+        # A link is good until the round's deadline and no longer. This used
+        # to fall back to a week-long window when the deadline had already
+        # passed, which meant any link minted late — for a player who
+        # registered after the deadline, or by an admin opening the reminders
+        # page on a Saturday afternoon — stayed usable long after kickoff, by
+        # someone who could already see the scores. A token created after the
+        # deadline is now born expired. The hours window only applies to a
+        # round that has no deadline at all yet.
         expires_at = None
-        if round_obj and round_obj.end_date:
-            # Use the round deadline; if it's in the past, fall back to expires_hours window
-            if round_obj.end_date > datetime.utcnow():
-                expires_at = round_obj.end_date
-            elif expires_hours:
-                expires_at = datetime.utcnow() + timedelta(hours=expires_hours)
+        if deadline:
+            expires_at = deadline
         elif expires_hours:
             expires_at = datetime.utcnow() + timedelta(hours=expires_hours)
 
@@ -202,6 +211,20 @@ class PickToken(db.Model):
             base_url = f"https://{base_url}"
             
         return f"{base_url}/pick/{self.token}"
+
+class AppSetting(db.Model):
+    """A small key/value store for settings that must outlive a process.
+
+    The admin password lives here once it has been changed from the
+    dashboard. It was previously written to a module global, which changed it
+    in one gunicorn worker until the next restart and nowhere else.
+    """
+    __tablename__ = 'app_settings'
+
+    key = db.Column(db.String(64), primary_key=True)
+    value = db.Column(db.Text, nullable=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 class CyclePayment(db.Model):
     """Track entry fee payments per player per cycle."""
