@@ -688,7 +688,25 @@ def results_digest(round_obj: Round) -> str:
     for pick, name in picks:
         (through if pick.is_winner else out).append((name, _team(pick.team_picked)))
 
-    still_in = Player.query.filter_by(status="active").count()
+    # The digest is written after the round has been closed, and closing the
+    # last round of a game changes everyone's status: a win takes the winner
+    # off 'active', and a wipeout puts all forty-eight back on it for the next
+    # cycle. Counting active players then describes the game that follows, so
+    # a title win read as "one casualty, 47 still in". In those two cases the
+    # round's own picks are the record of who was left.
+    #
+    # A later cycle existing counts as evidence too: Start New Game clears the
+    # winner's status, and it can be pressed before this digest is written.
+    moved_on = bool(
+        Round.query.filter(Round.cycle_number > (round_obj.cycle_number or 1)).count()
+    )
+    won = bool(Player.query.filter_by(status="winner").count())
+    if len(through) == 1 and (won or moved_on):
+        still_in = 1
+    elif not through and (round_obj.special_measure == "EARLY_TERMINATED" or moved_on):
+        still_in = 0
+    else:
+        still_in = Player.query.filter_by(status="active").count()
 
     lines = [
         f"⚽ Round {round_obj.round_number} results",
@@ -728,7 +746,7 @@ def _grid_data(cycle: int) -> dict:
     return data
 
 
-def refresh_grid_image(cycle, keep, out_name, subtitle=None) -> str | None:
+def refresh_grid_image(cycle, keep, out_name, subtitle=None, status=None) -> str | None:
     """Draw the picks grid for the players ``keep`` accepts.
 
     Returns the path, or None if there is nothing to draw or the render
@@ -751,6 +769,13 @@ def refresh_grid_image(cycle, keep, out_name, subtitle=None) -> str | None:
         data["players"] = [p for p in data.get("players", []) if keep(p)]
         if not data["players"]:
             return None
+        # The grid colours a row by the player's status now. A table about a
+        # past round can pin it instead: after a wipeout everyone is active
+        # again, and the round's casualties would otherwise be drawn as if
+        # they were still in.
+        if status:
+            for player in data["players"]:
+                player["status"] = status
         return render_picks_grid(
             data,
             os.path.join(EXPORTS_DIR, out_name),
@@ -789,6 +814,7 @@ def casualties_grid(round_obj: Round, gone: int) -> str | None:
         keep=keep,
         out_name=f"grid-r{round_obj.round_number}-out.png",
         subtitle=f"Knocked out in Round {round_obj.round_number}: {gone}",
+        status="eliminated",
     )
 
 
@@ -998,7 +1024,8 @@ def create_next_round(dry_run: bool = False) -> str:
     round, a rollover (which creates its own round), no completed round to
     follow, no fixtures available, or a matchday already used.
     """
-    from app import fetch_upcoming_fixtures  # local import: heavy at module load
+    # local import: heavy at module load
+    from app import fetch_upcoming_fixtures, matchdays_used_this_season
 
     existing = Round.query.filter(Round.status.in_(("active", "pending"))).first()
     if existing:
@@ -1016,6 +1043,9 @@ def create_next_round(dry_run: bool = False) -> str:
     if last.special_measure == "EARLY_TERMINATED":
         return "skipped — last round was early-terminated; rollover owns this"
 
+    if Player.query.filter_by(status="winner").count():
+        return "skipped — the game has been won; waiting for Start New Game"
+
     active_players = Player.query.filter_by(status="active").count()
     if active_players == 0:
         return "skipped — no active players; rollover should handle this"
@@ -1026,9 +1056,7 @@ def create_next_round(dry_run: bool = False) -> str:
     if not check.get("available"):
         return f"skipped — no upcoming fixtures ({check.get('error') or 'season break'})"
 
-    used_matchdays = {
-        r.pl_matchday for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()
-    }
+    used_matchdays = matchdays_used_this_season()
     matchday = check.get("next_matchday")
     if matchday in used_matchdays:
         return f"skipped — matchday {matchday} already used; needs an admin"

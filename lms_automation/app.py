@@ -206,6 +206,45 @@ def sanitize_phone_number(phone_number):
     sanitized = phone_number.replace(' ', '').replace('-', '').replace('(', '').replace(')', '').replace('.', '')
     return sanitized
 
+# --- Matchdays ---
+def matchdays_used_this_season(exclude_round_id=None, skip_waiting=False) -> set:
+    """Premier League matchdays already taken by a round in the current season.
+
+    A matchday number only means something within a season: matchday 12 comes
+    round every year. Rounds are kept for history, so asking "has any round
+    ever used matchday 12" starts answering yes for every matchday the game
+    played last season — the first game began on matchday 12 in November 2025,
+    and a year later that made 12 to 38 all look taken and left nothing to
+    create the next round on.
+
+    A round belongs to the season its first kickoff falls in. One with no
+    kickoff yet has not been played, so it only holds its matchday while it is
+    still open. skip_waiting leaves out a round parked on WAITING_FOR_FIXTURES,
+    whose matchday is provisional and must not block itself.
+    """
+    from football_api import FootballDataAPI
+
+    try:
+        season_start = datetime(int(FootballDataAPI.current_season()), 7, 1)
+    except (TypeError, ValueError):
+        now = datetime.utcnow()
+        season_start = datetime(now.year if now.month >= 7 else now.year - 1, 7, 1)
+
+    used = set()
+    for r in Round.query.filter(Round.pl_matchday.isnot(None)).all():
+        if exclude_round_id is not None and r.id == exclude_round_id:
+            continue
+        if skip_waiting and r.special_measure == 'WAITING_FOR_FIXTURES':
+            continue
+        kickoff = r.first_kickoff_at or r.earliest_kickoff()
+        if kickoff is not None:
+            if kickoff >= season_start:
+                used.add(r.pl_matchday)
+        elif r.status != 'completed':
+            used.add(r.pl_matchday)
+    return used
+
+
 # --- Winner detection ---
 def get_current_active_round():
     """Get the current active round, prioritizing the highest cycle.
@@ -298,6 +337,17 @@ def handle_rollover_scenario(reference_round=None):
         eliminated_count = Player.query.filter_by(status='eliminated').count()
 
         app.logger.info(f"ROLLOVER CHECK: active={active_count}, eliminated={eliminated_count}")
+
+        # A rollover is for a round that nobody survived. Marking the last
+        # player standing as the winner also leaves zero 'active' players, and
+        # without this check a win was indistinguishable from a wipeout: the
+        # game rolled straight into a new cycle, reactivating everyone who had
+        # been eliminated and leaving the winner behind on status 'winner',
+        # with no pick link for the game they had just won their way out of.
+        # A won game stops here and waits for Start New Game.
+        if Player.query.filter_by(status='winner').count() > 0:
+            app.logger.info("ROLLOVER CHECK: a winner is marked — the game is won, not rolled over")
+            return None
 
         if active_count == 0 and eliminated_count > 0:
             # Determine reference round for cycle calculation
@@ -448,11 +498,7 @@ def fetch_upcoming_fixtures(horizon_days: int = 45) -> dict:
         # its own matchday and skip to the next one: round 4 of cycle 7 was
         # created for matchday 9, then handed matchday 10 when fixtures finally
         # became available, leaving players a fortnight with no game.
-        used_matchdays = {
-            r.pl_matchday
-            for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()
-            if r.special_measure != 'WAITING_FOR_FIXTURES'
-        }
+        used_matchdays = matchdays_used_this_season(skip_waiting=True)
         app.logger.info(f"SEASON CHECK: Matchdays already used: {sorted(used_matchdays)}")
 
         # Filter out already-used matchdays
@@ -636,15 +682,14 @@ def create_next_round_after_rollover(reference_round: Round, next_cycle: int) ->
 
         # Check if this matchday is already used in a recent round
         # If so, try the next matchday
-        matchday_in_use = Round.query.filter_by(pl_matchday=next_matchday).first()
-        if matchday_in_use:
+        used_matchdays = matchdays_used_this_season()
+        if next_matchday in used_matchdays:
             # Try to find the next available matchday
             app.logger.info(f"Matchday {next_matchday} already used, searching for next available")
             from football_api import FootballDataAPI
             api = FootballDataAPI()
             fixtures_data = api.get_premier_league_fixtures()
 
-            used_matchdays = {r.pl_matchday for r in Round.query.filter(Round.pl_matchday.isnot(None)).all()}
             available_matchdays = set()
             for match in fixtures_data.get('matches', []):
                 md = match.get('matchday')
@@ -4283,6 +4328,20 @@ def run_rollover_check():
                 'diagnostics': diagnostics
             })
 
+        # A won game also has zero active players. That is a finished game
+        # waiting for Start New Game, not a wipeout to roll over.
+        if winner_count > 0:
+            reason = f'Game has a winner ({winner_count} marked) — start a new game rather than rolling over'
+            app.logger.info(f"  IDEMPOTENCY: {reason}")
+            app.logger.info("=" * 60)
+            return jsonify({
+                'success': True,
+                'rollover_triggered': False,
+                'already_handled': True,
+                'reason': reason,
+                'diagnostics': diagnostics
+            })
+
         # Additional idempotency: if reference round is already EARLY_TERMINATED but no active players,
         # something is wrong (rollover partially failed) - we should proceed to reactivate
         if reference_round and reference_round.special_measure == 'EARLY_TERMINATED':
@@ -4497,10 +4556,7 @@ def check_new_season():
         next_matchday = fixture_check['next_matchday']
 
         # Check if this matchday is already used
-        used_matchdays = {r.pl_matchday for r in Round.query.filter(
-            Round.pl_matchday.isnot(None),
-            Round.id != target_round.id  # Exclude the current round
-        ).all()}
+        used_matchdays = matchdays_used_this_season(exclude_round_id=target_round.id)
 
         if next_matchday in used_matchdays:
             # Find the next unused matchday
